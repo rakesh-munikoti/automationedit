@@ -217,6 +217,7 @@
   align-items: center;
   justify-content: center;
   aspect-ratio: 9 / 16;
+  width: 100%;
   max-width: 100%;
   height: auto;
 }

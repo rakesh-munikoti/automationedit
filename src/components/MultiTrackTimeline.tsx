@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import type { EditState, TrackItem } from '../App';
+import type { EditState, TrackItem, Actor } from '../App';
 
 interface MultiTrackTimelineProps {
   editState: EditState;
@@ -8,6 +8,7 @@ interface MultiTrackTimelineProps {
   selectedTrackId: string | null;
   setSelectedTrackId: (id: string | null) => void;
   setSelectedTrackType: (type: string | null) => void;
+  actors: Actor[];
 }
 
 const TrackClip = ({ 
@@ -60,7 +61,8 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
   onHistoryChange,
   selectedTrackId,
   setSelectedTrackId,
-  setSelectedTrackType
+  setSelectedTrackType,
+  actors
 }) => {
   const [timelineScale, setTimelineScale] = useState(15); 
   const timelineTracksRef = useRef<HTMLDivElement>(null);
@@ -158,6 +160,7 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
   };
 
   const onTimelineMouseDown = (e: React.MouseEvent) => {
+    e.stopPropagation();
     if (!timelineTracksRef.current) return;
     const rect = timelineTracksRef.current.getBoundingClientRect();
     
@@ -196,11 +199,83 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
 
   const allTracksCount = editState.videoTracks.length + editState.audioTracks.length + editState.textTracks.length;
 
+  const handleApplyActor = (clipToReplace: TrackItem, actorId: string) => {
+    const actor = actors.find(a => a.id === actorId);
+    if (!actor || actor.clips.length === 0) return;
+
+    const duration = clipToReplace.duration;
+    // ensure exact match: e.g. 9 seconds -> 4 clips of 2s, 1 clip of 1s
+    if (duration <= 0.05) return;
+
+    let remainingDur = duration;
+    let currentStartTime = clipToReplace.startTime;
+    const newClips: TrackItem[] = [];
+
+    let safety = 0;
+    while (remainingDur > 0.01 && safety < 1000) {
+      safety++;
+      const chunkDur = Math.min(2, remainingDur);
+      const randomActorClip = actor.clips[Math.floor(Math.random() * actor.clips.length)];
+      
+      newClips.push({
+        id: `actor-repl-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        type: 'video',
+        startTime: currentStartTime,
+        duration: chunkDur,
+        file: randomActorClip.file,
+        url: randomActorClip.url,
+        volume: 0.5, // 50% volume for actor clips
+        transitionOut: null
+      });
+
+      remainingDur -= chunkDur;
+      currentStartTime += chunkDur;
+    }
+
+    setEditState(prev => {
+      // Keep the original video track intact so the Video Track layer doesn't appear "missing"
+      const newVideoTracks = [...prev.videoTracks]; 
+      const newClipTracks = [...(prev.clipTracks || []), ...newClips].sort((a, b) => a.startTime - b.startTime);
+      const newState = { ...prev, videoTracks: newVideoTracks, clipTracks: newClipTracks };
+      onHistoryChange(newState);
+      return newState;
+    });
+    setSelectedTrackId(null);
+  };
+
+  const selectedVideoTrack = editState.videoTracks.find(t => t.id === selectedTrackId);
+
   return (
     <div className="multi-track-timeline">
       <div className="timeline-header">
         <div className="timeline-label">Timeline</div>
-        <div className="timeline-controls">
+        
+        {/* Replace Actor Context Menu */}
+        {selectedVideoTrack && (
+          <div style={{ marginLeft: '16px', display: 'flex', alignItems: 'center', gap: '8px', background: '#222', padding: '4px 8px', borderRadius: '4px', border: '1px solid #00d4ff', opacity: actors.length === 0 ? 0.5 : 1 }}>
+            <span style={{ fontSize: '11px', color: '#00d4ff', fontWeight: 'bold' }}>🎭 Replace Clip:</span>
+            {actors.length === 0 ? (
+               <span style={{ fontSize: '11px', color: '#ccc' }}>Create Actor in Clip Library first</span>
+            ) : (
+              <select 
+                onChange={(e) => { 
+                  if (e.target.value) {
+                    handleApplyActor(selectedVideoTrack, e.target.value);
+                  }
+                }}
+                value=""
+                style={{ background: '#111', color: '#fff', border: '1px solid #444', borderRadius: '2px', padding: '2px 4px', fontSize: '12px', outline: 'none', cursor: 'pointer' }}
+              >
+                <option value="" disabled>Select Actor...</option>
+                {actors.filter(a => a.clips.length > 0).map(a => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
+
+        <div className="timeline-controls" style={{ marginLeft: 'auto' }}>
           <button 
             className="zoom-btn"
             onClick={() => setTimelineScale(Math.max(5, timelineScale - 5))}
@@ -220,7 +295,10 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
       <div 
         className="timeline-tracks-container" 
         style={{ position: 'relative', flex: 1, overflowY: 'auto', overflowX: 'auto' }}
-        onMouseDown={onTimelineMouseDown}
+        onMouseDown={() => {
+          setSelectedTrackId(null);
+          setSelectedTrackType(null);
+        }}
       >
         <div 
           className="timeline-tracks" 
@@ -232,6 +310,7 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
             minWidth: `max(100%, ${140 + (editState.duration > 0 ? editState.duration : 60) * timelineScale + 40}px)`
           }}
         >
+          <div style={{ position: 'relative', height: 'max-content' }} onMouseDown={onTimelineMouseDown}>
           
           {/* Playhead Cursor */}
           {editState.duration > 0 && (
@@ -293,7 +372,7 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
                     bottom: 0,
                     fontSize: '11px',
                     color: 'rgba(255, 255, 255, 0.5)',
-                    transform: 'translateX(-50%)',
+                    transform: i === 0 ? 'translateX(4px)' : 'translateX(-50%)',
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'center',
@@ -309,18 +388,15 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
             </div>
           )}
 
+          {/* Clips Track */}
           <div className="track-group">
             <div className="track">
               <div className="track-info">
-                <span className="track-icon">🎬</span>
-                <span className="track-name">Video Track</span>
+                <span className="track-icon">🎞️</span>
+                <span className="track-name">Clips Track</span>
               </div>
               <div className="track-content" style={{ position: 'relative', minHeight: '60px', overflow: 'visible' }}>
-                {editState.videoTracks.map((track, index, arr) => {
-                  const nextTrack = arr[index + 1];
-                  const isAdjacent = nextTrack && Math.abs((track.startTime + track.duration) - nextTrack.startTime) < 0.05;
-                  const transitionPoint = (track.startTime + track.duration) * timelineScale;
-
+                {(editState.clipTracks || []).map((track, index, arr) => {
                   return (
                     <div key={track.id} style={{ position: 'absolute' }}>
                       <TrackClip 
@@ -331,41 +407,31 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
                         setSelectedTrackType={setSelectedTrackType}
                         timelineScale={timelineScale}
                       />
-                      {isAdjacent && (
-                        <div 
-                          className="transition-adder"
-                          style={{
-                            position: 'absolute',
-                            left: `${transitionPoint}px`,
-                            top: '30px',
-                            transform: 'translate(-50%, -50%)',
-                            width: '18px',
-                            height: '18px',
-                            backgroundColor: track.transitionOut === 'black-fade' ? '#00d4ff' : 'rgba(255,255,255,0.2)',
-                            border: '1px solid rgba(255,255,255,0.5)',
-                            borderRadius: '4px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            cursor: 'pointer',
-                            zIndex: 10,
-                            fontSize: '14px',
-                            fontWeight: 'bold',
-                            color: track.transitionOut === 'black-fade' ? '#000' : '#fff'
-                          }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditState(prev => {
-                              const newTracks = prev.videoTracks.map(t => t.id === track.id ? { ...t, transitionOut: t.transitionOut === 'black-fade' ? null : 'black-fade' as any } : t);
-                              const newState = { ...prev, videoTracks: newTracks };
-                              onHistoryChange(newState);
-                              return newState;
-                            });
-                          }}
-                        >
-                          {track.transitionOut === 'black-fade' ? '✓' : '+'}
-                        </div>
-                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div className="track-group">
+            <div className="track">
+              <div className="track-info">
+                <span className="track-icon">🎬</span>
+                <span className="track-name">Video Track</span>
+              </div>
+              <div className="track-content" style={{ position: 'relative', minHeight: '60px', overflow: 'visible' }}>
+                {editState.videoTracks.map((track, index, arr) => {
+                  return (
+                    <div key={track.id} style={{ position: 'absolute' }}>
+                      <TrackClip 
+                        item={track} 
+                        trackType="video" 
+                        selectedTrackId={selectedTrackId}
+                        setSelectedTrackId={setSelectedTrackId}
+                        setSelectedTrackType={setSelectedTrackType}
+                        timelineScale={timelineScale}
+                      />
                     </div>
                   );
                 })}
@@ -423,6 +489,7 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
               Import media to begin editing
             </div>
           )}
+          </div>
         </div>
       </div>
     </div>

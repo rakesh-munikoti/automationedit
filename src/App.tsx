@@ -13,11 +13,25 @@ export interface TrackItem {
   mediaStartTime?: number;
   transitionOut?: 'black-fade' | null;
   muted?: boolean;
+  volume?: number;
   file?: File;
   url?: string;
   content?: string;
   effects?: EffectType[];
   properties?: Record<string, any>;
+}
+
+export interface ActorClip {
+  id: string;
+  file: File;
+  url: string;
+  duration: number;
+}
+
+export interface Actor {
+  id: string;
+  name: string;
+  clips: ActorClip[];
 }
 
 export interface EffectType {
@@ -29,6 +43,7 @@ export interface EffectType {
 
 export interface EditState {
   videoTracks: TrackItem[];
+  clipTracks: TrackItem[];
   audioTracks: TrackItem[];
   textTracks: TrackItem[];
   imageTracks: TrackItem[];
@@ -37,11 +52,16 @@ export interface EditState {
   isPlaying: boolean;
 }
 
+import ClipLibrary from './components/ClipLibrary';
+
 function App() {
   const [hasVideo, setHasVideo] = useState(false);
+  const [actors, setActors] = useState<Actor[]>([]);
+  const [isClipLibraryOpen, setIsClipLibraryOpen] = useState(false);
 
   const [editState, setEditState] = useState<EditState>({
     videoTracks: [],
+    clipTracks: [],
     audioTracks: [],
     textTracks: [],
     imageTracks: [],
@@ -242,6 +262,9 @@ function App() {
             <MdRedo size={18} />
           </button>
           <div className="action-divider" style={{ width: '1px', height: '20px', background: 'rgba(255,255,255,0.1)', margin: '0 8px' }} />
+          <button className="btn-library" style={{ background: '#333', color: '#fff', padding: '6px 16px', borderRadius: '4px', fontSize: '14px', border: '1px solid rgba(255,255,255,0.1)', marginRight: '8px', cursor: 'pointer' }} onClick={() => setIsClipLibraryOpen(true)}>
+            🎥 Clip Library
+          </button>
           <button 
             className="icon-btn extraction-btn" 
             title="Extract Audio" 
@@ -319,6 +342,7 @@ function App() {
                   selectedTrackId={selectedTrackId}
                   setSelectedTrackId={setSelectedTrackId}
                   setSelectedTrackType={setSelectedTrackType}
+                  actors={actors}
                 />
               </div>
             </div>
@@ -351,6 +375,14 @@ function App() {
           </>
         )}
       </div>
+      
+      {isClipLibraryOpen && (
+        <ClipLibrary 
+          actors={actors} 
+          setActors={setActors} 
+          onClose={() => setIsClipLibraryOpen(false)} 
+        />
+      )}
     </div>
   );
 }
