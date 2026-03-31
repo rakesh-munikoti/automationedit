@@ -102,7 +102,7 @@
 .editor-layout {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 300px;
+  grid-template-columns: 1fr 380px;
   gap: 12px;
   overflow: hidden;
   padding: 12px;
@@ -194,21 +194,23 @@
   min-height: 500px;
 }
 
-/* Right Preview Section */
+/* Right sidebar preview — fills available height */
 .right-sidebar > .preview-area {
+  flex: 1;
+  min-height: 0;
   background: #0f0f1f;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   padding: 12px;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  min-height: auto;
+  overflow: hidden;
 }
 
+/* Preview window fills all remaining space in sidebar */
 .preview-window {
-  flex: 0 0 auto;
+  flex: 1;
+  min-height: 0;
   background: #000;
   border-radius: 8px;
   overflow: hidden;
@@ -216,23 +218,19 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  aspect-ratio: 9 / 16;
   width: 100%;
-  max-width: 100%;
-  height: auto;
 }
 
 .video-container {
   width: 100%;
   height: 100%;
   position: relative;
-  aspect-ratio: 9 / 16;
 }
 
 .preview-video {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .preview-placeholder {

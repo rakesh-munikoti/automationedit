@@ -19,6 +19,8 @@ export interface TrackItem {
   content?: string;
   effects?: EffectType[];
   properties?: Record<string, any>;
+  /** Links a placed clip back to its source ActorClip for usage tracking */
+  actorClipId?: string;
 }
 
 export interface ActorClip {
@@ -26,6 +28,8 @@ export interface ActorClip {
   file: File;
   url: string;
   duration: number;
+  /** How many times this clip has been confirmed-used via the Done button */
+  usageCount: number;
 }
 
 export interface Actor {
@@ -53,11 +57,33 @@ export interface EditState {
 }
 
 import ClipLibrary from './components/ClipLibrary';
+import { loadActors, saveActors } from './lib/db';
 
 function App() {
   const [hasVideo, setHasVideo] = useState(false);
   const [actors, setActors] = useState<Actor[]>([]);
+  const [isDbLoaded, setIsDbLoaded] = useState(false);
   const [isClipLibraryOpen, setIsClipLibraryOpen] = useState(false);
+
+  // Load persistence state on app mount
+  useEffect(() => {
+    loadActors()
+      .then(loadedActors => {
+        setActors(loadedActors);
+        setIsDbLoaded(true);
+      })
+      .catch(err => {
+        console.error("Failed to load actors from DB", err);
+        setIsDbLoaded(true); // Failsafe to allow saving new state
+      });
+  }, []);
+
+  // Save changes explicitly whenever actors array is modified in state
+  useEffect(() => {
+    if (isDbLoaded) {
+      saveActors(actors).catch(err => console.error("Failed to save actors to DB:", err));
+    }
+  }, [actors, isDbLoaded]);
 
   const [editState, setEditState] = useState<EditState>({
     videoTracks: [],
@@ -213,6 +239,33 @@ function App() {
       return newState;
     });
   }, [selectedTrackId, addToHistory]);
+
+  // Mark all actor clips currently on the clip track as "used" once per Done press
+  const handleDone = useCallback(() => {
+    const clipTracks = editState.clipTracks || [];
+    if (clipTracks.length === 0) return;
+
+    // Gather a map of actorClipId -> how many times it appears in the current clip track
+    const usageDelta: Record<string, number> = {};
+    for (const track of clipTracks) {
+      if (track.actorClipId) {
+        usageDelta[track.actorClipId] = (usageDelta[track.actorClipId] || 0) + 1;
+      }
+    }
+
+    if (Object.keys(usageDelta).length === 0) return;
+
+    setActors(prevActors =>
+      prevActors.map(actor => ({
+        ...actor,
+        clips: actor.clips.map(clip =>
+          usageDelta[clip.id]
+            ? { ...clip, usageCount: clip.usageCount + usageDelta[clip.id] }
+            : clip
+        )
+      }))
+    );
+  }, [editState.clipTracks, setActors]);
 
   // Global spacebar listener for playback
   useEffect(() => {
@@ -370,6 +423,37 @@ function App() {
                     {Math.floor(editState.currentTime)}s / {Math.floor(editState.duration)}s
                   </div>
                 </div>
+
+                {/* Done Button — marks all current clip-track clips as used */}
+                {(editState.clipTracks || []).length > 0 && (
+                  <button
+                    onClick={handleDone}
+                    title="Mark all placed clips as used and lock in usage counts"
+                    style={{
+                      marginTop: '10px',
+                      width: '100%',
+                      padding: '10px 0',
+                      background: 'linear-gradient(135deg, #00c853, #00897b)',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      fontSize: '14px',
+                      fontWeight: 'bold',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                      letterSpacing: '0.5px',
+                      boxShadow: '0 2px 12px rgba(0, 200, 83, 0.35)',
+                      transition: 'opacity 0.2s'
+                    }}
+                    onMouseOver={e => (e.currentTarget.style.opacity = '0.85')}
+                    onMouseOut={e => (e.currentTarget.style.opacity = '1')}
+                  >
+                    ✅ Done — Lock Clip Usage
+                  </button>
+                )}
               </div>
             </div>
           </>

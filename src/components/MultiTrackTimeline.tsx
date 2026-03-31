@@ -204,9 +204,38 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
     if (!actor || actor.clips.length === 0) return;
 
     const duration = clipToReplace.duration;
-    // ensure exact match: e.g. 9 seconds -> 4 clips of 2s, 1 clip of 1s
     if (duration <= 0.05) return;
 
+    // Fisher-Yates shuffle helper
+    const shuffleArr = <T,>(arr: T[]): T[] => {
+      const a = [...arr];
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    };
+
+    // Sort clips by usageCount ascending so least-used come first.
+    // Within the same usageCount tier, shuffle randomly so there's variety.
+    const sortedByUsage = [...actor.clips].sort((a, b) => (a.usageCount ?? 0) - (b.usageCount ?? 0));
+    const minCount = sortedByUsage[0]?.usageCount ?? 0;
+    let deck: typeof actor.clips = [];
+    let tierStart = 0;
+    // Build the deck tier-by-tier: shuffle within each tier then concatenate
+    while (tierStart < sortedByUsage.length) {
+      const tierCount = sortedByUsage[tierStart].usageCount ?? 0;
+      let tierEnd = tierStart;
+      while (tierEnd < sortedByUsage.length && (sortedByUsage[tierEnd].usageCount ?? 0) === tierCount) {
+        tierEnd++;
+      }
+      deck = [...deck, ...shuffleArr(sortedByUsage.slice(tierStart, tierEnd))];
+      tierStart = tierEnd;
+    }
+    // Suppress unused warning
+    void minCount;
+
+    let deckIndex = 0;
     let remainingDur = duration;
     let currentStartTime = clipToReplace.startTime;
     const newClips: TrackItem[] = [];
@@ -214,18 +243,36 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
     let safety = 0;
     while (remainingDur > 0.01 && safety < 1000) {
       safety++;
+
+      // Once the entire deck is exhausted, rebuild it (resort+shuffle for any newly updated counts)
+      if (deckIndex >= deck.length) {
+        const resorted = [...actor.clips].sort((a, b) => (a.usageCount ?? 0) - (b.usageCount ?? 0));
+        deck = [];
+        let ts = 0;
+        while (ts < resorted.length) {
+          const tc = resorted[ts].usageCount ?? 0;
+          let te = ts;
+          while (te < resorted.length && (resorted[te].usageCount ?? 0) === tc) te++;
+          deck = [...deck, ...shuffleArr(resorted.slice(ts, te))];
+          ts = te;
+        }
+        deckIndex = 0;
+      }
+
+      const pickedClip = deck[deckIndex++];
       const chunkDur = Math.min(2, remainingDur);
-      const randomActorClip = actor.clips[Math.floor(Math.random() * actor.clips.length)];
-      
+
       newClips.push({
         id: `actor-repl-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
         type: 'video',
         startTime: currentStartTime,
         duration: chunkDur,
-        file: randomActorClip.file,
-        url: randomActorClip.url,
-        volume: 0.5, // 50% volume for actor clips
-        transitionOut: null
+        file: pickedClip.file,
+        url: pickedClip.url,
+        volume: 0.5,
+        transitionOut: null,
+        // Link back to the original ActorClip so Done button can increment usageCount
+        actorClipId: pickedClip.id
       });
 
       remainingDur -= chunkDur;
@@ -233,8 +280,7 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
     }
 
     setEditState(prev => {
-      // Keep the original video track intact so the Video Track layer doesn't appear "missing"
-      const newVideoTracks = [...prev.videoTracks]; 
+      const newVideoTracks = [...prev.videoTracks];
       const newClipTracks = [...(prev.clipTracks || []), ...newClips].sort((a, b) => a.startTime - b.startTime);
       const newState = { ...prev, videoTracks: newVideoTracks, clipTracks: newClipTracks };
       onHistoryChange(newState);
@@ -242,6 +288,7 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
     });
     setSelectedTrackId(null);
   };
+
 
   const selectedVideoTrack = editState.videoTracks.find(t => t.id === selectedTrackId);
 
@@ -396,7 +443,7 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
                 <span className="track-name">Clips Track</span>
               </div>
               <div className="track-content" style={{ position: 'relative', minHeight: '60px', overflow: 'visible' }}>
-                {(editState.clipTracks || []).map((track, index, arr) => {
+                {(editState.clipTracks || []).map((track) => {
                   return (
                     <div key={track.id} style={{ position: 'absolute' }}>
                       <TrackClip 
@@ -421,7 +468,7 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
                 <span className="track-name">Video Track</span>
               </div>
               <div className="track-content" style={{ position: 'relative', minHeight: '60px', overflow: 'visible' }}>
-                {editState.videoTracks.map((track, index, arr) => {
+                {editState.videoTracks.map((track) => {
                   return (
                     <div key={track.id} style={{ position: 'absolute' }}>
                       <TrackClip 

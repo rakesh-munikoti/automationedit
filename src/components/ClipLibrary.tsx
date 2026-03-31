@@ -55,7 +55,8 @@ const ClipLibrary: React.FC<ClipLibraryProps> = ({ actors, setActors, onClose })
           id: `actorclip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           file,
           url,
-          duration: video.duration
+          duration: video.duration,
+          usageCount: 0
         };
         
         setActors(prevActors => prevActors.map(a => {
@@ -198,45 +199,97 @@ const ClipLibrary: React.FC<ClipLibraryProps> = ({ actors, setActors, onClose })
                   </label>
                 </div>
                 
+                {/* Grid: auto-fill columns, each ROW explicitly 260px tall via grid-auto-rows */}
                 <div style={{
-                  flex: 1, overflowY: 'auto', padding: '20px',
-                  display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-                  gap: '20px', alignContent: 'start'
+                  flex: 1, overflowY: 'auto', padding: '16px',
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))',
+                  gridAutoRows: '260px',
+                  gap: '12px',
+                  alignContent: 'start'
                 }}>
-                  {selectedActor.clips.map(clip => (
-                    <div key={clip.id} style={{
-                      backgroundColor: '#2a2a3e', borderRadius: '8px', overflow: 'hidden',
-                      position: 'relative', border: '1px solid rgba(255,255,255,0.1)'
-                    }}>
-                      <div style={{ aspectRatio: '16/9', backgroundColor: '#000' }}>
-                        <video 
-                          src={clip.url} 
-                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                          onMouseOver={e => (e.target as HTMLVideoElement).play()}
-                          onMouseOut={e => {
-                            const v = e.target as HTMLVideoElement;
-                            v.pause();
-                            v.currentTime = 0;
-                          }}
-                          muted
-                          preload="metadata"
-                        />
+                  {selectedActor.clips.map(clip => {
+                    const uses = clip.usageCount ?? 0;
+                    const heatColor = uses === 0
+                      ? '#00c853' : uses <= 3 ? '#ffd600' : uses <= 7 ? '#ff9100' : '#ff1744';
+                    const heatLabel = uses === 0 ? 'Fresh' : uses <= 3 ? 'Light' : uses <= 7 ? 'Used' : 'Heavy';
+
+                    return (
+                      <div key={clip.id} style={{
+                        height: '100%',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        backgroundColor: '#16162a',
+                        borderRadius: '10px',
+                        overflow: 'hidden',
+                        border: `1px solid ${uses === 0 ? 'rgba(0,200,83,0.3)' : 'rgba(255,255,255,0.08)'}`,
+                        boxShadow: uses === 0 ? '0 0 12px rgba(0,200,83,0.12)' : 'none',
+                        transition: 'transform 0.15s, box-shadow 0.15s',
+                        cursor: 'default',
+                      }}
+                        onMouseOver={e => {
+                          e.currentTarget.style.transform = 'scale(1.03)';
+                          e.currentTarget.style.zIndex = '10';
+                        }}
+                        onMouseOut={e => {
+                          e.currentTarget.style.transform = 'scale(1)';
+                          e.currentTarget.style.zIndex = '1';
+                        }}
+                      >
+                        {/* VIDEO AREA — explicit height keeps portrait shape */}
+                        <div style={{ position: 'relative', flex: 1, overflow: 'hidden', backgroundColor: '#000' }}>
+                          <video
+                            src={clip.url}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                            onMouseOver={e => (e.target as HTMLVideoElement).play()}
+                            onMouseOut={e => {
+                              const v = e.target as HTMLVideoElement;
+                              v.pause();
+                              v.currentTime = 0;
+                            }}
+                            muted
+                            preload="metadata"
+                          />
+                          {/* Usage Heat Badge */}
+                          <div style={{
+                            position: 'absolute', top: '6px', left: '6px',
+                            backgroundColor: heatColor, color: '#000',
+                            fontSize: '10px', fontWeight: '800',
+                            padding: '2px 7px', borderRadius: '20px',
+                            boxShadow: `0 1px 4px rgba(0,0,0,0.5)`
+                          }}>
+                            {heatLabel}
+                          </div>
+                        </div>
+
+                        {/* FOOTER — fixed height 50px */}
+                        <div style={{
+                          height: '50px', flexShrink: 0,
+                          padding: '0 10px',
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                          borderTop: '1px solid rgba(255,255,255,0.06)',
+                          backgroundColor: '#12121f',
+                        }}>
+                          <div>
+                            <div style={{ fontSize: '11px', color: '#aaa' }}>{clip.duration.toFixed(1)}s</div>
+                            <div style={{ fontSize: '10px', color: heatColor, fontWeight: '700' }}>Used {uses}×</div>
+                          </div>
+                          <button
+                            onClick={() => handleDeleteClip(selectedActor.id, clip.id)}
+                            style={{
+                              background: 'transparent', border: 'none', color: '#ff4d4d',
+                              cursor: 'pointer', padding: '4px', opacity: 0.5,
+                              transition: 'opacity 0.2s'
+                            }}
+                            onMouseOver={e => (e.currentTarget.style.opacity = '1')}
+                            onMouseOut={e => (e.currentTarget.style.opacity = '0.5')}
+                          >
+                            <FiTrash2 size={13} />
+                          </button>
+                        </div>
                       </div>
-                      <div style={{ padding: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontSize: '12px', color: '#ccc' }}>
-                          {clip.duration.toFixed(1)}s
-                        </span>
-                        <button 
-                          onClick={() => handleDeleteClip(selectedActor.id, clip.id)}
-                          style={{
-                            background: 'transparent', border: 'none', color: '#ff4d4d', cursor: 'pointer'
-                          }}
-                        >
-                          <FiTrash2 size={14} />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   {selectedActor.clips.length === 0 && (
                     <div style={{
                       gridColumn: '1 / -1', textAlign: 'center', padding: '40px',
