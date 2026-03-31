@@ -14,6 +14,7 @@ export interface TrackItem {
   startTime: number;
   duration: number;
   mediaStartTime?: number;
+  sourceDuration?: number;
   transitionOut?: 'black-fade' | null;
   muted?: boolean;
   volume?: number;
@@ -53,6 +54,8 @@ export interface EffectType {
 export interface EditState {
   videoTracks: TrackItem[];
   clipTracks: TrackItem[];
+  manualClipTracks: TrackItem[];
+  overlayTracks: TrackItem[];
   audioTracks: TrackItem[];
   textTracks: TrackItem[];
   imageTracks: TrackItem[];
@@ -88,9 +91,13 @@ function App() {
     }
   }, [actors, isDbLoaded]);
 
+  const overlayInputRef = useRef<HTMLInputElement>(null);
+
   const [editState, setEditState] = useState<EditState>({
     videoTracks: [],
     clipTracks: [],
+    manualClipTracks: [],
+    overlayTracks: [],
     audioTracks: [],
     textTracks: [],
     imageTracks: [],
@@ -201,7 +208,13 @@ function App() {
       setExportMessage('Preparing files...');
 
       // Build the visual timeline: for each time segment find which clip is on top
-      const videoSegments = [...editState.videoTracks, ...editState.clipTracks];
+      // Priority: overlay > manualClip > clip > video
+      const videoSegments = [
+        ...editState.videoTracks,
+        ...editState.clipTracks,
+        ...editState.manualClipTracks,
+        ...(editState.overlayTracks || [])
+      ];
 
       const boundaries = new Set<number>([0, editState.duration]);
       videoSegments.forEach(t => {
@@ -218,6 +231,8 @@ function App() {
         const mid = (segStart + segEnd) / 2;
 
         const clip =
+          (editState.overlayTracks || []).find(t => mid >= t.startTime && mid < t.startTime + t.duration) ||
+          editState.manualClipTracks.find(t => mid >= t.startTime && mid < t.startTime + t.duration) ||
           editState.clipTracks.find(t => mid >= t.startTime && mid < t.startTime + t.duration) ||
           editState.videoTracks.find(t => mid >= t.startTime && mid < t.startTime + t.duration);
 
@@ -585,6 +600,66 @@ function App() {
           </button>
           <button className="icon-btn" title="Redo" onClick={redo} disabled={historyIndex >= history.length - 1}>
             <MdRedo size={18} />
+          </button>
+          <div className="action-divider" style={{ width: '1px', height: '20px', background: 'rgba(255,255,255,0.1)', margin: '0 8px' }} />
+          {/* Overlay Upload */}
+          <input
+            ref={overlayInputRef}
+            type="file"
+            hidden
+            accept="video/*"
+            onChange={e => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              const url = URL.createObjectURL(file);
+              const video = document.createElement('video');
+              video.src = url;
+              video.onloadedmetadata = () => {
+                const dur = video.duration;
+                const newOverlay: TrackItem = {
+                  id: `overlay-clip-${Date.now()}`,
+                  type: 'video',
+                  startTime: editState.currentTime,
+                  duration: dur,
+                  mediaStartTime: 0,
+                  sourceDuration: dur,
+                  volume: 1,
+                  url,
+                  file
+                };
+                const newState = {
+                  ...editState,
+                  overlayTracks: [...(editState.overlayTracks || []), newOverlay].sort((a,b) => a.startTime - b.startTime)
+                };
+                setEditState(newState);
+                addToHistory(newState);
+              };
+              e.target.value = '';
+            }}
+          />
+          <button
+            style={{
+              background: 'linear-gradient(135deg, #7c3aed, #a855f7)',
+              color: '#fff',
+              padding: '6px 14px',
+              borderRadius: '6px',
+              fontSize: '13px',
+              fontWeight: '600',
+              border: 'none',
+              cursor: 'pointer',
+              marginRight: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px',
+              boxShadow: '0 2px 10px rgba(124, 58, 237, 0.4)',
+              transition: 'opacity 0.2s'
+            }}
+            title="Add clip to Overlay track at current playhead"
+            onClick={() => overlayInputRef.current?.click()}
+            onMouseOver={e => (e.currentTarget.style.opacity = '0.8')}
+            onMouseOut={e => (e.currentTarget.style.opacity = '1')}
+          >
+            🎞️ Overlay
           </button>
           <div className="action-divider" style={{ width: '1px', height: '20px', background: 'rgba(255,255,255,0.1)', margin: '0 8px' }} />
           <button className="btn-library" style={{ background: '#333', color: '#fff', padding: '6px 16px', borderRadius: '4px', fontSize: '14px', border: '1px solid rgba(255,255,255,0.1)', marginRight: '8px', cursor: 'pointer' }} onClick={() => setIsClipLibraryOpen(true)}>

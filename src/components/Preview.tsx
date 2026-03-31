@@ -78,13 +78,13 @@ const Preview: React.FC<PreviewProps> = ({ editState, currentTime, isPlaying, se
 
   // Handle Volume
   useEffect(() => {
-    [...editState.videoTracks, ...(editState.clipTracks || [])].forEach(track => {
+    [...editState.videoTracks, ...(editState.clipTracks || []), ...(editState.manualClipTracks || []), ...(editState.overlayTracks || [])].forEach(track => {
       const el = videoRefs.current[track.id];
       if (el) {
         el.volume = track.volume !== undefined ? track.volume : 1;
       }
     });
-  }, [editState.videoTracks, editState.clipTracks]);
+  }, [editState.videoTracks, editState.clipTracks, editState.manualClipTracks, editState.overlayTracks]);
 
   useEffect(() => {
     editState.audioTracks.forEach(track => {
@@ -157,6 +157,30 @@ const Preview: React.FC<PreviewProps> = ({ editState, currentTime, isPlaying, se
             }
           }
 
+          const activeManualClip = (prev.manualClipTracks || []).find(t => nextTime >= t.startTime && nextTime < t.startTime + t.duration);
+          if (activeManualClip) {
+            const mEl = videoRefs.current[activeManualClip.id];
+            if (mEl) {
+               if (mEl.paused) mEl.play().catch(() => {});
+               const expectedMTime = (nextTime - activeManualClip.startTime) + (activeManualClip.mediaStartTime || 0);
+               if (Math.abs(mEl.currentTime - expectedMTime) > 0.2) {
+                 mEl.currentTime = expectedMTime; 
+               }
+            }
+          }
+
+          const activeOverlayClip = (prev.overlayTracks || []).find(t => nextTime >= t.startTime && nextTime < t.startTime + t.duration);
+          if (activeOverlayClip) {
+            const oEl = videoRefs.current[activeOverlayClip.id];
+            if (oEl) {
+               if (oEl.paused) oEl.play().catch(() => {});
+               const expectedOTime = (nextTime - activeOverlayClip.startTime) + (activeOverlayClip.mediaStartTime || 0);
+               if (Math.abs(oEl.currentTime - expectedOTime) > 0.2) {
+                 oEl.currentTime = expectedOTime;
+               }
+            }
+          }
+
           return { ...prev, currentTime: nextTime };
         });
       }
@@ -209,7 +233,18 @@ const Preview: React.FC<PreviewProps> = ({ editState, currentTime, isPlaying, se
     t => currentTime >= t.startTime && currentTime <= t.startTime + t.duration
   );
 
-  const hasMedia = editState.videoTracks.length > 0 || (editState.clipTracks && editState.clipTracks.length > 0);
+  const activeManualTrack = (editState.manualClipTracks || []).find(
+    t => currentTime >= t.startTime && currentTime <= t.startTime + t.duration
+  );
+
+  const activeOverlayTrack = (editState.overlayTracks || []).find(
+    t => currentTime >= t.startTime && currentTime <= t.startTime + t.duration
+  );
+
+  const hasMedia = editState.videoTracks.length > 0 || 
+                   (editState.clipTracks && editState.clipTracks.length > 0) || 
+                   (editState.manualClipTracks && editState.manualClipTracks.length > 0) ||
+                   (editState.overlayTracks && editState.overlayTracks.length > 0);
 
   return (
     <div className="preview-window">
@@ -217,12 +252,26 @@ const Preview: React.FC<PreviewProps> = ({ editState, currentTime, isPlaying, se
         <div className="video-container" style={{ position: 'relative' }}>
           
           {/* Render a rolling window of video clips to prevent memory explosion tracking 50+ clips */}
-          {[...editState.videoTracks, ...(editState.clipTracks || [])].filter(
+          {[
+            ...editState.videoTracks,
+            ...(editState.clipTracks || []),
+            ...(editState.manualClipTracks || []),
+            ...(editState.overlayTracks || [])
+          ].filter(
              t => (t.startTime >= currentTime - 2 && t.startTime <= currentTime + 5) ||
                   (currentTime >= t.startTime && currentTime <= t.startTime + t.duration)
           ).map((track) => {
+             const isOverlayLayer = (editState.overlayTracks || []).some(t => t.id === track.id);
+             const isManualLayer = (editState.manualClipTracks || []).some(t => t.id === track.id);
              const isClipLayer = (editState.clipTracks || []).some(t => t.id === track.id);
-             const isActive = isClipLayer ? (activeClipTrack?.id === track.id) : (activeVideoTrack?.id === track.id);
+             
+             let isActive = false;
+             if (isOverlayLayer) isActive = activeOverlayTrack?.id === track.id;
+             else if (isManualLayer) isActive = activeManualTrack?.id === track.id;
+             else if (isClipLayer) isActive = activeClipTrack?.id === track.id;
+             else isActive = activeVideoTrack?.id === track.id;
+             
+             const trackZIndex = isOverlayLayer ? 15 : isManualLayer ? 10 : isClipLayer ? 5 : 1;
              
              return (
                <video
@@ -243,10 +292,10 @@ const Preview: React.FC<PreviewProps> = ({ editState, currentTime, isPlaying, se
                    width: '100%',
                    height: '100%',
                    objectFit: 'contain',
-                   background: isClipLayer ? 'transparent' : '#000',
+                   background: isClipLayer || isManualLayer || isOverlayLayer ? 'transparent' : '#000',
                    opacity: isActive ? 1 : 0,
                    pointerEvents: isActive ? 'auto' : 'none',
-                   zIndex: isClipLayer ? 5 : 1 // Ensure B-Roll overlays main track visually if they overlap
+                   zIndex: trackZIndex
                  }}
                />
              );

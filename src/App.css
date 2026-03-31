@@ -523,6 +523,17 @@
   background: linear-gradient(135deg, #1a4d6d, #0d2642);
 }
 
+.clip-clip {
+  background: linear-gradient(135deg, #6d4d1a, #42260d);
+  border-color: rgba(255, 170, 0, 0.4);
+}
+
+.clip-clip.selected {
+  background: linear-gradient(135deg, #a67c1e, #634610);
+  border-color: #ffa500;
+  box-shadow: 0 0 12px rgba(255, 165, 0, 0.4);
+}
+
 .clip-audio {
   background: linear-gradient(135deg, #4d1a1a, #2d0d0d);
 }
@@ -786,4 +797,16 @@
     max-width: 100%;
   }
 }
+
+/* Export Progress Animations */
+@keyframes progress-pulse {
+  0% { opacity: 0.8; }
+  50% { opacity: 1; transform: scaleY(1.1); }
+  100% { opacity: 0.8; }
+}
+
+.export-progress-bar-inner {
+  animation: progress-pulse 2s infinite ease-in-out;
+}
+
 
