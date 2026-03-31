@@ -30,12 +30,22 @@ export interface ActorClip {
   duration: number;
   /** How many times this clip has been confirmed-used via the Done button */
   usageCount: number;
+  /**
+   * Groups clips that were uploaded together (same upload event = same outfit/batch).
+   * Format: "batch-<timestamp>". Used by the queue builder to round-robin
+   * across batches so the same outfit never appears twice in a row.
+   */
+  batchId?: string;
 }
 
 export interface Actor {
   id: string;
   name: string;
   clips: ActorClip[];
+  /** Persistent ordered deck of clip IDs for sequential, non-repeating selection */
+  deckQueue?: string[];
+  /** How many clips from deckQueue have already been consumed */
+  deckPosition?: number;
 }
 
 export interface EffectType {
@@ -396,6 +406,7 @@ function App() {
                   setSelectedTrackId={setSelectedTrackId}
                   setSelectedTrackType={setSelectedTrackType}
                   actors={actors}
+                  setActors={setActors}
                 />
               </div>
             </div>

@@ -45,6 +45,9 @@ const ClipLibrary: React.FC<ClipLibraryProps> = ({ actors, setActors, onClose })
     if (!e.target.files || !selectedActorId) return;
     
     const files = Array.from(e.target.files);
+    // All files from a single upload event share one batchId.
+    // A 5-second gap between two upload events produces different timestamps → different batches.
+    const batchId = `batch-${Date.now()}`;
     
     files.forEach(file => {
       const url = URL.createObjectURL(file);
@@ -56,7 +59,8 @@ const ClipLibrary: React.FC<ClipLibraryProps> = ({ actors, setActors, onClose })
           file,
           url,
           duration: video.duration,
-          usageCount: 0
+          usageCount: 0,
+          batchId,
         };
         
         setActors(prevActors => prevActors.map(a => {
@@ -199,7 +203,6 @@ const ClipLibrary: React.FC<ClipLibraryProps> = ({ actors, setActors, onClose })
                   </label>
                 </div>
                 
-                {/* Grid: auto-fill columns, each ROW explicitly 260px tall via grid-auto-rows */}
                 <div style={{
                   flex: 1, overflowY: 'auto', padding: '16px',
                   display: 'grid',
@@ -208,11 +211,31 @@ const ClipLibrary: React.FC<ClipLibraryProps> = ({ actors, setActors, onClose })
                   gap: '12px',
                   alignContent: 'start'
                 }}>
-                  {selectedActor.clips.map(clip => {
-                    const uses = clip.usageCount ?? 0;
+                  {(() => {
+                    // Build a sorted list of unique batchIds (chronological order = insertion order)
+                    const batchOrder: string[] = [];
+                    for (const clip of selectedActor.clips) {
+                      const bid = clip.batchId ?? 'default';
+                      if (!batchOrder.includes(bid)) batchOrder.push(bid);
+                    }
+                    // Map batchId → "Batch N" label and a distinct pastel color
+                    const batchPalette = [
+                      '#a78bfa', '#34d399', '#fb923c', '#60a5fa', '#f472b6',
+                      '#facc15', '#38bdf8', '#f87171', '#4ade80', '#c084fc'
+                    ];
+                    const batchMeta = Object.fromEntries(
+                      batchOrder.map((bid, i) => [
+                        bid,
+                        { label: `Batch ${i + 1}`, color: batchPalette[i % batchPalette.length] }
+                      ])
+                    );
+
+                    return selectedActor.clips.map(clip => {
+                      const uses = clip.usageCount ?? 0;
                     const heatColor = uses === 0
                       ? '#00c853' : uses <= 3 ? '#ffd600' : uses <= 7 ? '#ff9100' : '#ff1744';
                     const heatLabel = uses === 0 ? 'Fresh' : uses <= 3 ? 'Light' : uses <= 7 ? 'Used' : 'Heavy';
+                    const batch = batchMeta[clip.batchId ?? 'default'] ?? { label: 'Batch ?', color: '#888' };
 
                     return (
                       <div key={clip.id} style={{
@@ -260,6 +283,18 @@ const ClipLibrary: React.FC<ClipLibraryProps> = ({ actors, setActors, onClose })
                           }}>
                             {heatLabel}
                           </div>
+                          {/* Batch Badge */}
+                          <div style={{
+                            position: 'absolute', top: '6px', right: '6px',
+                            backgroundColor: batch.color,
+                            color: '#000',
+                            fontSize: '9px', fontWeight: '800',
+                            padding: '2px 6px', borderRadius: '20px',
+                            boxShadow: '0 1px 4px rgba(0,0,0,0.5)',
+                            letterSpacing: '0.3px'
+                          }}>
+                            {batch.label}
+                          </div>
                         </div>
 
                         {/* FOOTER — fixed height 50px */}
@@ -289,7 +324,8 @@ const ClipLibrary: React.FC<ClipLibraryProps> = ({ actors, setActors, onClose })
                         </div>
                       </div>
                     );
-                  })}
+                    });
+                  })()}
                   {selectedActor.clips.length === 0 && (
                     <div style={{
                       gridColumn: '1 / -1', textAlign: 'center', padding: '40px',
