@@ -219,10 +219,19 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
 
       <div 
         className="timeline-tracks-container" 
-        style={{ position: 'relative', flex: 1, overflowY: 'auto' }}
+        style={{ position: 'relative', flex: 1, overflowY: 'auto', overflowX: 'auto' }}
         onMouseDown={onTimelineMouseDown}
       >
-        <div className="timeline-tracks" ref={timelineTracksRef} style={{ position: 'relative', minHeight: '100%', paddingBottom: '30px' }}>
+        <div 
+          className="timeline-tracks" 
+          ref={timelineTracksRef} 
+          style={{ 
+            position: 'relative', 
+            minHeight: '100%', 
+            paddingBottom: '30px',
+            minWidth: `max(100%, ${140 + (editState.duration > 0 ? editState.duration : 60) * timelineScale + 40}px)`
+          }}
+        >
           
           {/* Playhead Cursor */}
           {editState.duration > 0 && (
@@ -255,8 +264,52 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
             </div>
           )}
 
+          {/* Timeline Ruler */}
+          {editState.duration > 0 && (
+            <div className="timeline-ruler-wrapper" style={{ 
+              display: 'flex',
+              position: 'relative',
+              height: '24px', 
+              borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+            }}>
+              {/* Sticky Top-Left Corner for UI consistency */}
+              <div style={{ 
+                width: '140px', 
+                minWidth: '140px',
+                background: '#0f0f1f', 
+                position: 'sticky', 
+                left: 0, 
+                zIndex: 40,
+                borderRight: '1px solid rgba(255, 255, 255, 0.08)'
+              }}></div>
+              
+              <div className="timeline-ruler" style={{ position: 'relative', flex: 1 }}>
+              {Array.from({ length: Math.ceil((editState.duration > 0 ? editState.duration : 60) / 5) + 1 }).map((_, i) => (
+                <div 
+                  key={i} 
+                  style={{
+                    position: 'absolute',
+                    left: `${i * 5 * timelineScale}px`,
+                    bottom: 0,
+                    fontSize: '11px',
+                    color: 'rgba(255, 255, 255, 0.5)',
+                    transform: 'translateX(-50%)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    userSelect: 'none',
+                    pointerEvents: 'none'
+                  }}
+                >
+                  <span style={{ marginBottom: '4px' }}>{i * 5}s</span>
+                  <div style={{ height: '6px', width: '1px', backgroundColor: 'rgba(255, 255, 255, 0.2)' }} />
+                </div>
+              ))}
+              </div>
+            </div>
+          )}
+
           <div className="track-group">
-            <div className="track-group-label">Video</div>
             <div className="track">
               <div className="track-info">
                 <span className="track-icon">🎬</span>
@@ -321,7 +374,6 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
           </div>
 
           <div className="track-group">
-            <div className="track-group-label">Audio</div>
             <div className="track">
               <div className="track-info">
                 <span className="track-icon">🔊</span>
@@ -345,7 +397,6 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
 
           {editState.textTracks.length > 0 && (
             <div className="track-group">
-              <div className="track-group-label">Text</div>
               {editState.textTracks.map(track => (
                 <div key={track.id} className="track">
                   <div className="track-info">
