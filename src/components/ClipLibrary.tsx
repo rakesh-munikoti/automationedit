@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { FiX, FiPlus, FiUpload, FiTrash2 } from 'react-icons/fi';
+import { FiX, FiPlus, FiUpload, FiTrash2, FiDownload, FiFolder } from 'react-icons/fi';
 import type { Actor, ActorClip } from '../App';
 
 interface ClipLibraryProps {
@@ -12,6 +12,117 @@ const ClipLibrary: React.FC<ClipLibraryProps> = ({ actors, setActors, onClose })
   const [newActorName, setNewActorName] = useState('');
   const [selectedActorId, setSelectedActorId] = useState<string | null>(actors.length > 0 ? actors[0].id : null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const importJsonRef = useRef<HTMLInputElement>(null);
+  const [importStatus, setImportStatus] = useState<string | null>(null);
+
+  // ── Export: builds a portable JSON manifest (no File blobs) ──────────────────
+  const handleExportJSON = () => {
+    const manifest = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      actors: actors.map(actor => ({
+        id: actor.id,
+        name: actor.name,
+        clips: actor.clips.map(clip => ({
+          id: clip.id,
+          filename: clip.file.name,
+          duration: clip.duration,
+          usageCount: clip.usageCount,
+          batchId: clip.batchId ?? null,
+        }))
+      }))
+    };
+
+    const blob = new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ClipLibrary_${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ── Import: reads a JSON manifest, then lets user pick a folder to match files ─
+  const handleImportJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const manifest = JSON.parse(ev.target?.result as string);
+        if (!manifest.actors || !Array.isArray(manifest.actors)) {
+          setImportStatus('❌ Invalid JSON: no "actors" array found.');
+          return;
+        }
+
+        // Immediately rebuild actors WITHOUT files — clips will be re-linked when
+        // the user drops/picks the clip folder.
+        const pendingActors: Actor[] = manifest.actors.map((a: any) => ({
+          id: a.id,
+          name: a.name,
+          clips: a.clips.map((c: any) => ({
+            id: c.id,
+            file: new File([], c.filename),  // placeholder — no data yet
+            url: '',
+            duration: c.duration,
+            usageCount: c.usageCount ?? 0,
+            batchId: c.batchId ?? undefined,
+            _needsRelink: true,             // internal flag
+            _filename: c.filename,          // original filename for matching
+          } as any))
+        }));
+
+        setActors(pendingActors);
+        setSelectedActorId(pendingActors[0]?.id ?? null);
+        setImportStatus(`✅ Loaded ${pendingActors.length} actor(s). Now pick the clips folder below to relink files.`);
+      } catch {
+        setImportStatus('❌ Failed to parse JSON file.');
+      }
+    };
+    reader.readAsText(file);
+    if (importJsonRef.current) importJsonRef.current.value = '';
+  };
+
+  // ── Folder picker: matches uploaded files to pending clips by filename ────────
+  const handleRelinkFolder = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    const fileMap = new Map<string, File>(files.map(f => [f.name, f]));
+    let linked = 0;
+    let missing: string[] = [];
+
+    setActors(prevActors =>
+      prevActors.map(actor => ({
+        ...actor,
+        clips: actor.clips.map((clip: any) => {
+          const targetName: string = clip._filename ?? clip.file?.name;
+          const matchedFile = fileMap.get(targetName);
+          if (matchedFile) {
+            linked++;
+            const url = URL.createObjectURL(matchedFile);
+            return {
+              ...clip,
+              file: matchedFile,
+              url,
+              _needsRelink: false,
+              _filename: undefined,
+            };
+          } else {
+            if (targetName) missing.push(targetName);
+            return clip;
+          }
+        })
+      }))
+    );
+
+    const msg = missing.length === 0
+      ? `✅ All ${linked} clip(s) relinked successfully!`
+      : `⚠️ Relinked ${linked} clip(s). Missing: ${missing.slice(0,5).join(', ')}${missing.length > 5 ? ` +${missing.length-5} more` : ''}`;
+    setImportStatus(msg);
+    if (e.target) e.target.value = '';
+  };
 
   const handleCreateActor = () => {
     if (!newActorName.trim()) return;
@@ -92,19 +203,104 @@ const ClipLibrary: React.FC<ClipLibraryProps> = ({ actors, setActors, onClose })
         boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
       }}>
         <div style={{
-          padding: '20px', borderBottom: '1px solid rgba(255,255,255,0.1)',
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '16px 20px', borderBottom: '1px solid rgba(255,255,255,0.1)',
+          display: 'flex', flexDirection: 'column', gap: '10px',
           backgroundColor: '#0f0f1f'
         }}>
-          <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span>🎥</span> Actor Clip Library
-          </h2>
-          <button onClick={onClose} style={{
-            background: 'transparent', border: 'none', color: '#fff',
-            cursor: 'pointer', padding: '8px', display: 'flex', alignItems: 'center'
-          }}>
-            <FiX size={24} />
-          </button>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span>🎥</span> Actor Clip Library
+            </h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {/* ── EXPORT JSON ── */}
+              <button
+                onClick={handleExportJSON}
+                disabled={actors.length === 0}
+                title="Export library as JSON manifest"
+                style={{
+                  background: actors.length === 0 ? '#222' : 'linear-gradient(135deg,#00b894,#00cec9)',
+                  border: 'none', borderRadius: '6px', color: '#000',
+                  padding: '7px 14px', fontSize: '13px', fontWeight: '700',
+                  cursor: actors.length === 0 ? 'not-allowed' : 'pointer',
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                  opacity: actors.length === 0 ? 0.4 : 1,
+                  boxShadow: actors.length === 0 ? 'none' : '0 2px 10px rgba(0,206,201,0.35)',
+                  transition: 'opacity 0.2s'
+                }}
+              >
+                <FiDownload size={14} /> Export JSON
+              </button>
+
+              {/* ── IMPORT JSON ── */}
+              <label
+                title="Import a previously exported JSON manifest"
+                style={{
+                  background: 'linear-gradient(135deg,#6c5ce7,#a29bfe)',
+                  border: 'none', borderRadius: '6px', color: '#fff',
+                  padding: '7px 14px', fontSize: '13px', fontWeight: '700',
+                  cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                  boxShadow: '0 2px 10px rgba(108,92,231,0.35)',
+                }}
+              >
+                <FiUpload size={14} /> Import JSON
+                <input
+                  ref={importJsonRef}
+                  type="file" accept=".json,application/json"
+                  style={{ display: 'none' }}
+                  onChange={handleImportJSON}
+                />
+              </label>
+
+              {/* ── RELINK FOLDER ── */}
+              <label
+                title="Pick the folder containing your clip files to relink after import"
+                style={{
+                  background: 'linear-gradient(135deg,#fd79a8,#e17055)',
+                  border: 'none', borderRadius: '6px', color: '#fff',
+                  padding: '7px 14px', fontSize: '13px', fontWeight: '700',
+                  cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                  boxShadow: '0 2px 10px rgba(253,121,168,0.35)',
+                }}
+              >
+                <FiFolder size={14} /> Relink Folder
+                <input
+                  type="file"
+                  // @ts-ignore — webkitdirectory is non-standard but widely supported
+                  webkitdirectory=""
+                  multiple
+                  accept="video/*"
+                  style={{ display: 'none' }}
+                  onChange={handleRelinkFolder}
+                />
+              </label>
+
+              <button onClick={onClose} style={{
+                background: 'transparent', border: 'none', color: '#fff',
+                cursor: 'pointer', padding: '8px', display: 'flex', alignItems: 'center'
+              }}>
+                <FiX size={24} />
+              </button>
+            </div>
+          </div>
+
+          {/* Status banner */}
+          {importStatus && (
+            <div style={{
+              padding: '8px 14px', borderRadius: '6px', fontSize: '13px',
+              background: importStatus.startsWith('✅') ? 'rgba(0,184,148,0.15)'
+                        : importStatus.startsWith('⚠️') ? 'rgba(253,203,110,0.15)'
+                        : 'rgba(214,48,49,0.15)',
+              border: `1px solid ${importStatus.startsWith('✅') ? 'rgba(0,184,148,0.4)'
+                        : importStatus.startsWith('⚠️') ? 'rgba(253,203,110,0.4)'
+                        : 'rgba(214,48,49,0.4)'}`,
+              color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+            }}>
+              <span>{importStatus}</span>
+              <button onClick={() => setImportStatus(null)} style={{ background: 'none', border: 'none', color: '#aaa', cursor: 'pointer', fontSize: '16px', lineHeight: 1 }}>×</button>
+            </div>
+          )}
         </div>
         
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
