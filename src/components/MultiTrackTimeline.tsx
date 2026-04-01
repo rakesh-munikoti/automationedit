@@ -154,6 +154,9 @@ const TrackClip = ({
         padding: clipWidth < 10 ? 0 : '',
         borderLeft: '1px solid rgba(0,0,0,0.5)',
         borderRight: '1px solid rgba(0,0,0,0.5)',
+        outline: isSelected ? '2px solid #ffffff' : 'none',
+        outlineOffset: '-2px',
+        boxShadow: isSelected ? '0 0 12px rgba(255, 255, 255, 0.4)' : 'none',
         overflow: 'hidden',
         position: 'absolute',
         cursor: isDraggable ? 'grab' : 'pointer'
@@ -242,6 +245,70 @@ const TrackClip = ({
   );
 };
 
+const SearchableActorSelect = ({ actors, onSelect }: { actors: Actor[], onSelect: (id: string) => void }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const filteredActors = actors.filter(a => a.clips.length > 0 && a.name.toLowerCase().includes(query.toLowerCase()));
+
+  return (
+    <div ref={wrapperRef} style={{ position: 'relative' }}>
+      <button 
+        title="Search and select an actor"
+        onClick={() => { setIsOpen(!isOpen); setQuery(''); }}
+        style={{ background: 'transparent', color: '#fff', border: 'none', fontSize: '12px', outline: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', padding: 0 }}
+      >
+        Select Actor... <span style={{ fontSize: '8px', color: '#8892b0' }}>{isOpen ? '▲' : '▼'}</span>
+      </button>
+
+      {isOpen && (
+        <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: '8px', width: '220px', background: '#13131a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', boxShadow: '0 8px 24px rgba(0,0,0,0.6)', zIndex: 1000, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: '8px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+            <input 
+              autoFocus
+              type="text" 
+              placeholder="🔍 Search actors..." 
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              style={{ width: '100%', boxSizing: 'border-box', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '6px 8px', color: '#fff', fontSize: '11px', outline: 'none', transition: 'border-color 0.2s' }}
+              onFocus={(e) => e.target.style.borderColor = 'rgba(0, 212, 255, 0.5)'}
+              onBlur={(e) => e.target.style.borderColor = 'rgba(255,255,255,0.1)'}
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+          <div style={{ maxHeight: '250px', overflowY: 'auto' }}>
+            {filteredActors.length === 0 ? (
+               <div style={{ padding: '12px', fontSize: '11px', color: '#888', textAlign: 'center', fontStyle: 'italic' }}>No matches found</div>
+            ) : (
+              filteredActors.map(a => (
+                <div 
+                  key={a.id} 
+                  onClick={() => { onSelect(a.id); setIsOpen(false); }}
+                  style={{ padding: '8px 12px', fontSize: '12px', color: '#e2e8f0', cursor: 'pointer', transition: 'background 0.2s, color 0.2s', borderLeft: '2px solid transparent' }}
+                  onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; e.currentTarget.style.color = '#fff'; e.currentTarget.style.borderLeftColor = '#00d4ff'; }}
+                  onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#e2e8f0'; e.currentTarget.style.borderLeftColor = 'transparent'; }}
+                >
+                  {a.name}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({ 
   editState, 
   setEditState, 
@@ -661,6 +728,25 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
   };
 
 
+  const handleMuteTrack = (trackKey: 'overlayTracks' | 'manualClipTracks' | 'clipTracks') => {
+    setEditState((prev) => {
+      const trackArray = prev[trackKey] || [];
+      if (trackArray.length === 0) return prev;
+      
+      const isAllMuted = trackArray.every(t => t.volume === 0 || t.muted === true);
+      
+      const newTrackArray = trackArray.map(t => ({
+        ...t,
+        volume: isAllMuted ? 1 : 0,
+        muted: !isAllMuted
+      }));
+
+      const newState = { ...prev, [trackKey]: newTrackArray };
+      onHistoryChange(newState);
+      return newState;
+    });
+  };
+
   const selectedVideoTrack = editState.videoTracks.find(t => t.id === selectedTrackId);
 
   return (
@@ -670,29 +756,20 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
         
         {/* Replace Actor Context Menu */}
         {selectedVideoTrack && (
-          <div style={{ marginLeft: '16px', display: 'flex', alignItems: 'center', gap: '8px', background: '#222', padding: '4px 8px', borderRadius: '4px', border: '1px solid #00d4ff', opacity: actors.length === 0 ? 0.5 : 1 }}>
-            <span style={{ fontSize: '11px', color: '#00d4ff', fontWeight: 'bold' }}>🎭 Replace Clip:</span>
-            {actors.length === 0 ? (
-               <span style={{ fontSize: '11px', color: '#ccc' }}>Create Actor in Clip Library first</span>
-            ) : (
-              <select 
-                onChange={(e) => { 
-                  if (e.target.value) {
-                    handleApplyActor(selectedVideoTrack, e.target.value);
-                  }
-                }}
-                value=""
-                style={{ background: '#111', color: '#fff', border: '1px solid #444', borderRadius: '2px', padding: '2px 4px', fontSize: '12px', outline: 'none', cursor: 'pointer' }}
-              >
-                <option value="" disabled>Select Actor...</option>
-                {actors.filter(a => a.clips.length > 0).map(a => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
-                ))}
-              </select>
-            )}
+          <div style={{ marginLeft: '16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(255,255,255,0.04)', padding: '5px 12px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.08)' }}>
+              <span style={{ fontSize: '11px', color: '#a0aec0', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Replace:</span>
+              {actors.length === 0 ? (
+                 <span style={{ fontSize: '12px', color: '#fc8181', fontStyle: 'italic' }}>No Actors</span>
+              ) : (
+                <SearchableActorSelect 
+                  actors={actors} 
+                  onSelect={(actorId) => handleApplyActor(selectedVideoTrack, actorId)} 
+                />
+              )}
+            </div>
 
-            <div style={{ width: '1px', height: '16px', background: 'rgba(255,255,255,0.2)', margin: '0 4px' }} />
-            <span style={{ fontSize: '11px', color: '#00d4ff', fontWeight: 'bold' }}>OR</span>
+            <div style={{ height: '14px', width: '1px', background: 'rgba(255,255,255,0.2)' }} />
             
             <input 
               type="file" 
@@ -703,9 +780,11 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
             />
             <button 
               onClick={() => manualFileInputRef.current?.click()}
-              style={{ background: 'linear-gradient(135deg, #0d8a5c 0%, #086141 100%)', border: '1px solid #14b87c', borderRadius: '2px', padding: '3px 8px', fontSize: '11px', fontWeight: 'bold', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+              style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', padding: '5px 12px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', color: '#e2e8f0', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', transition: 'all 0.2s ease' }}
+              onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.1)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.4)'; }}
+              onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
             >
-              Manual Clip 📁
+              Upload Manual
             </button>
           </div>
         )}
@@ -834,9 +913,33 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
           {/* Overlay Track - above Manual Clips */}
           <div className="track-group">
             <div className="track">
-              <div className="track-info">
-                <span className="track-icon">🎥</span>
-                <span className="track-name" style={{ color: '#a855f7' }}>Overlay</span>
+              <div className="track-info" style={{ justifyContent: 'space-between', paddingRight: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}>
+                  <span className="track-icon">🎥</span>
+                  <span className="track-name" style={{ color: '#a855f7', overflow: 'hidden', textOverflow: 'ellipsis' }}>Overlay</span>
+                </div>
+                <button 
+                  onClick={() => handleMuteTrack('overlayTracks')}
+                  title="Mute / Unmute Track"
+                  style={{ 
+                    background: ((editState.overlayTracks || []).length > 0 && (editState.overlayTracks || []).every(t => t.volume === 0 || t.muted)) ? 'rgba(255, 77, 77, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+                    border: ((editState.overlayTracks || []).length > 0 && (editState.overlayTracks || []).every(t => t.volume === 0 || t.muted)) ? '1px solid rgba(255, 77, 77, 0.4)' : '1px solid rgba(255, 255, 255, 0.15)',
+                    borderRadius: '4px',
+                    cursor: 'pointer', 
+                    fontSize: '10px',
+                    width: '20px',
+                    height: '20px',
+                    flexShrink: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: 0,
+                    opacity: (editState.overlayTracks || []).length === 0 ? 0.3 : 1,
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  {((editState.overlayTracks || []).length > 0 && (editState.overlayTracks || []).every(t => t.volume === 0 || t.muted)) ? '🔇' : '🔊'}
+                </button>
               </div>
               <div className="track-content" style={{ position: 'relative', minHeight: '60px', overflow: 'visible' }}>
                 {(editState.overlayTracks || []).map((track) => {
@@ -870,9 +973,33 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
           {/* Manual Clips Track */}
           <div className="track-group">
             <div className="track">
-              <div className="track-info">
-                <span className="track-icon">📁</span>
-                <span className="track-name" style={{ color: '#14b87c' }}>Manual Clips</span>
+              <div className="track-info" style={{ justifyContent: 'space-between', paddingRight: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}>
+                  <span className="track-icon">📁</span>
+                  <span className="track-name" style={{ color: '#14b87c', overflow: 'hidden', textOverflow: 'ellipsis' }}>Manual Clips</span>
+                </div>
+                <button 
+                  onClick={() => handleMuteTrack('manualClipTracks')}
+                  title="Mute / Unmute Track"
+                  style={{ 
+                    background: ((editState.manualClipTracks || []).length > 0 && (editState.manualClipTracks || []).every(t => t.volume === 0 || t.muted)) ? 'rgba(255, 77, 77, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+                    border: ((editState.manualClipTracks || []).length > 0 && (editState.manualClipTracks || []).every(t => t.volume === 0 || t.muted)) ? '1px solid rgba(255, 77, 77, 0.4)' : '1px solid rgba(255, 255, 255, 0.15)',
+                    borderRadius: '4px',
+                    cursor: 'pointer', 
+                    fontSize: '10px',
+                    width: '20px',
+                    height: '20px',
+                    flexShrink: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: 0,
+                    opacity: (editState.manualClipTracks || []).length === 0 ? 0.3 : 1,
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  {((editState.manualClipTracks || []).length > 0 && (editState.manualClipTracks || []).every(t => t.volume === 0 || t.muted)) ? '🔇' : '🔊'}
+                </button>
               </div>
               <div className="track-content" style={{ position: 'relative', minHeight: '60px', overflow: 'visible' }}>
                 {(editState.manualClipTracks || []).map((track) => {
@@ -906,9 +1033,33 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
           {/* Clips Track */}
           <div className="track-group">
             <div className="track">
-              <div className="track-info">
-                <span className="track-icon">🎞️</span>
-                <span className="track-name">Clips Track</span>
+              <div className="track-info" style={{ justifyContent: 'space-between', paddingRight: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}>
+                  <span className="track-icon">🎞️</span>
+                  <span className="track-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>Clips Track</span>
+                </div>
+                <button 
+                  onClick={() => handleMuteTrack('clipTracks')}
+                  title="Mute / Unmute Track"
+                  style={{ 
+                    background: ((editState.clipTracks || []).length > 0 && (editState.clipTracks || []).every(t => t.volume === 0 || t.muted)) ? 'rgba(255, 77, 77, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+                    border: ((editState.clipTracks || []).length > 0 && (editState.clipTracks || []).every(t => t.volume === 0 || t.muted)) ? '1px solid rgba(255, 77, 77, 0.4)' : '1px solid rgba(255, 255, 255, 0.15)',
+                    borderRadius: '4px',
+                    cursor: 'pointer', 
+                    fontSize: '10px',
+                    width: '20px',
+                    height: '20px',
+                    flexShrink: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: 0,
+                    opacity: (editState.clipTracks || []).length === 0 ? 0.3 : 1,
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  {((editState.clipTracks || []).length > 0 && (editState.clipTracks || []).every(t => t.volume === 0 || t.muted)) ? '🔇' : '🔊'}
+                </button>
               </div>
               <div className="track-content" style={{ position: 'relative', minHeight: '60px', overflow: 'visible' }}>
                 {(editState.clipTracks || []).map((track) => {
