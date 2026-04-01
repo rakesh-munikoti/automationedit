@@ -171,20 +171,24 @@ const TrackClip = ({
       }}
     >
       {(trackType === 'clip' || trackType === 'video' || trackType === 'manual' || trackType === 'overlay') && item.url && clipWidth > 10 && (
-        <video 
-          src={`${item.url}#t=${item.mediaStartTime || 0}`} 
-          style={{ 
-            position: 'absolute', 
-            top: 0, left: 0, width: '100%', height: '100%', 
-            objectFit: 'cover', 
-            opacity: trackType === 'clip' ? 1 : 0.6, 
-            pointerEvents: 'none',
-            zIndex: 0
-          }} 
-          muted 
-          playsInline
-          preload="metadata"
-        />
+        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', overflow: 'hidden', zIndex: 0, opacity: trackType === 'clip' ? 1 : 0.6 }}>
+          {Array.from({ length: Math.max(1, Math.ceil(clipWidth / 30)) }).map((_, i) => (
+            <video 
+              key={i}
+              src={`${item.url}#t=${(item.mediaStartTime || 0) + (i * 30 / timelineScale)}`} 
+              style={{ 
+                width: '30px', 
+                minWidth: '30px',
+                height: '100%', 
+                objectFit: 'cover', 
+                pointerEvents: 'none',
+              }} 
+              muted 
+              playsInline
+              preload="metadata"
+            />
+          ))}
+        </div>
       )}
 
       {trackType === 'audio' && (
@@ -212,17 +216,16 @@ const TrackClip = ({
       )}
       
       <div className="clip-content" style={{ opacity: showContent ? 1 : 0, zIndex: 2, position: 'relative', width: '100%', display: 'flex', justifyContent: 'center' }}>
-        {showContent && trackType !== 'clip' && trackType !== 'manual' && trackType !== 'overlay' && (
+        {showContent && trackType === 'text' && (
           <span className="clip-label" style={{ 
             padding: '2px 6px', 
-            textShadow: trackType === 'audio' ? 'none' : '1px 1px 2px rgba(0,0,0,0.8)',
-            background: trackType === 'audio' ? 'rgba(0,0,0,0.5)' : 'transparent',
+            textShadow: '1px 1px 2px rgba(0,0,0,0.8)',
             borderRadius: '4px',
             maxWidth: '100%',
             overflow: 'hidden',
             textOverflow: 'ellipsis'
           }}>
-            {icon} {showText && item.id.slice(0, 8)}
+            {icon} {showText && (item.content || 'Text')}
           </span>
         )}
       </div>
@@ -747,7 +750,43 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
     });
   };
 
+  const replaceSlotFileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleReplaceClipSlot = (e: React.ChangeEvent<HTMLInputElement>, clipToReplace: TrackItem) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    video.src = url;
+    video.onloadedmetadata = () => {
+      setEditState(prev => {
+        const newClipTracks = (prev.clipTracks || []).map(t => {
+          if (t.id === clipToReplace.id) {
+            return {
+              ...t,
+              url,
+              file,
+              sourceDuration: video.duration,
+              actorClipId: undefined 
+            };
+          }
+          return t;
+        });
+
+        const newState = { ...prev, clipTracks: newClipTracks };
+        onHistoryChange(newState);
+        return newState;
+      });
+      setSelectedTrackId(null);
+      if (replaceSlotFileInputRef.current) {
+         replaceSlotFileInputRef.current.value = '';
+      }
+    };
+  };
+
   const selectedVideoTrack = editState.videoTracks.find(t => t.id === selectedTrackId);
+  const selectedClipTrack = (editState.clipTracks || []).find(t => t.id === selectedTrackId);
 
   return (
     <div className="multi-track-timeline">
@@ -785,6 +824,28 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
               onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
             >
               Upload Manual
+            </button>
+          </div>
+        )}
+
+        {/* Replace Clip Slot Context Menu (Clips Track) */}
+        {selectedClipTrack && (
+          <div style={{ marginLeft: '16px', display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.04)', padding: '5px 12px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.08)' }}>
+            <span style={{ fontSize: '11px', color: '#a0aec0', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Replace Slot:</span>
+            <input 
+              type="file" 
+              accept="video/mp4,video/webm" 
+              style={{ display: 'none' }} 
+              ref={replaceSlotFileInputRef}
+              onChange={(e) => handleReplaceClipSlot(e, selectedClipTrack)}
+            />
+            <button 
+              onClick={() => replaceSlotFileInputRef.current?.click()}
+              style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', padding: '5px 12px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', color: '#e2e8f0', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'all 0.2s ease' }}
+              onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.1)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.4)'; }}
+              onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
+            >
+              Upload Custom Video
             </button>
           </div>
         )}

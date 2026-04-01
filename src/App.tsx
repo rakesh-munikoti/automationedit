@@ -65,7 +65,8 @@ export interface EditState {
 }
 
 import ClipLibrary from './components/ClipLibrary';
-import { loadActors, saveActors } from './lib/db';
+import ProjectsDashboard from './components/ProjectsDashboard';
+import { loadActors, saveActors, loadProject, saveProject } from './lib/db';
 
 function App() {
   const [hasVideo, setHasVideo] = useState(false);
@@ -73,6 +74,30 @@ function App() {
   const [isDbLoaded, setIsDbLoaded] = useState(false);
   const [isClipLibraryOpen, setIsClipLibraryOpen] = useState(false);
 
+  // --- Project Workspace State ---
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [activeProjectName, setActiveProjectName] = useState('');
+
+  const overlayInputRef = useRef<HTMLInputElement>(null);
+
+  const [editState, setEditState] = useState<EditState>({
+    videoTracks: [],
+    clipTracks: [],
+    manualClipTracks: [],
+    overlayTracks: [],
+    audioTracks: [],
+    textTracks: [],
+    imageTracks: [],
+    currentTime: 0,
+    duration: 0,
+    isPlaying: false,
+  });
+
+  // --- Editor History & Video Core ---
+  const [history, setHistory] = useState<EditState[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+
+  // 1. Initial Load (Actors only, projects are lazy-loaded on Dashboard)
   useEffect(() => {
     loadActors()
       .then(loadedActors => {
@@ -91,23 +116,61 @@ function App() {
     }
   }, [actors, isDbLoaded]);
 
-  const overlayInputRef = useRef<HTMLInputElement>(null);
+  // 2. Project Selection Handlers
+  const handleSelectProject = async (id: string) => {
+    try {
+      const proj = await loadProject(id);
+      if (proj) {
+        setActiveProjectId(proj.id);
+        setActiveProjectName(proj.name);
+        proj.state.isPlaying = false;
+        setEditState(proj.state);
+        setHasVideo(proj.state.videoTracks.length > 0);
+        setHistory([proj.state]);
+        setHistoryIndex(0);
+      }
+    } catch (err) {
+      console.error('Failed to open project', err);
+    }
+  };
 
-  const [editState, setEditState] = useState<EditState>({
-    videoTracks: [],
-    clipTracks: [],
-    manualClipTracks: [],
-    overlayTracks: [],
-    audioTracks: [],
-    textTracks: [],
-    imageTracks: [],
-    currentTime: 0,
-    duration: 0,
-    isPlaying: false,
-  });
+  const handleCreateProject = () => {
+    const defaultName = prompt('Enter a name for your new project:', 'Untitled Project');
+    if (defaultName !== null) {
+      const newEmptyState = {
+        videoTracks: [],
+        clipTracks: [],
+        manualClipTracks: [],
+        overlayTracks: [],
+        audioTracks: [],
+        textTracks: [],
+        imageTracks: [],
+        currentTime: 0,
+        duration: 0,
+        isPlaying: false,
+      };
 
-  const [history, setHistory] = useState<EditState[]>([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
+      const newId = `proj-${Date.now()}`;
+      setActiveProjectId(newId);
+      setActiveProjectName(defaultName || 'Untitled Project');
+      setEditState(newEmptyState);
+      setHasVideo(false);
+      setHistory([newEmptyState]);
+      setHistoryIndex(0);
+    }
+  };
+
+  // 3. Isolated Auto-Save Dispatcher
+  useEffect(() => {
+    if (activeProjectId) {
+      saveProject({
+        id: activeProjectId,
+        name: activeProjectName,
+        lastModified: Date.now(),
+        state: editState
+      }).catch(err => console.error('Failed to auto-save project:', err));
+    }
+  }, [editState, activeProjectId, activeProjectName]);
 
   const [isExporting, setIsExporting] = useState(false);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
@@ -585,13 +648,36 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [undo, redo]);
 
+  // If there is no active project, we display the grid view Dashboard
+  if (!activeProjectId) {
+    return (
+      <div className="App">
+        <ProjectsDashboard
+          onSelectProject={handleSelectProject}
+          onCreateProject={handleCreateProject}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="capcut-editor">
       {/* Top Bar */}
       <div className="top-bar">
-        <div className="brand">
-          <h1>CutStudio</h1>
-          <p>Professional Video Editor</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '32px' }}>
+          <div className="brand" style={{ cursor: 'pointer' }} onClick={() => setActiveProjectId(null)}>
+            <h1>CutStudio</h1>
+            <p>Professional Video Editor</p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', borderLeft: '1px solid #333', paddingLeft: '24px' }}>
+            <button
+              onClick={() => setActiveProjectId(null)}
+              style={{ background: '#1e1e2d', border: '1px solid #333', padding: '6px 14px', borderRadius: '4px', color: '#fff', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              ← Dashboard
+            </button>
+            <span style={{ fontSize: '14px', color: '#00d4ff', fontWeight: 'bold' }}>{activeProjectName}</span>
+          </div>
         </div>
 
         <div className="top-actions">
@@ -629,7 +715,7 @@ function App() {
                 };
                 const newState = {
                   ...editState,
-                  overlayTracks: [...(editState.overlayTracks || []), newOverlay].sort((a,b) => a.startTime - b.startTime)
+                  overlayTracks: [...(editState.overlayTracks || []), newOverlay].sort((a, b) => a.startTime - b.startTime)
                 };
                 setEditState(newState);
                 addToHistory(newState);
