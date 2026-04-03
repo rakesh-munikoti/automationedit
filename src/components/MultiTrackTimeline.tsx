@@ -171,23 +171,13 @@ const TrackClip = ({
       }}
     >
       {(trackType === 'clip' || trackType === 'video' || trackType === 'manual' || trackType === 'overlay') && item.url && clipWidth > 10 && (
-        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', overflow: 'hidden', zIndex: 0, opacity: trackType === 'clip' ? 1 : 0.6 }}>
-          {Array.from({ length: Math.max(1, Math.ceil(clipWidth / 30)) }).map((_, i) => (
-            <video 
-              key={i}
-              src={`${item.url}#t=${(item.mediaStartTime || 0) + (i * 30 / timelineScale)}`} 
-              style={{ 
-                width: '30px', 
-                minWidth: '30px',
-                height: '100%', 
-                objectFit: 'cover', 
-                pointerEvents: 'none',
-              }} 
-              muted 
-              playsInline
-              preload="metadata"
-            />
-          ))}
+        <div style={{ 
+          position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 0, 
+          opacity: trackType === 'clip' ? 1 : 0.6,
+          background: trackType === 'overlay' ? 'repeating-linear-gradient(45deg, rgba(168, 85, 247, 0.2), rgba(168, 85, 247, 0.2) 10px, rgba(168, 85, 247, 0.1) 10px, rgba(168, 85, 247, 0.1) 20px)' :
+                      trackType === 'manual' ? 'repeating-linear-gradient(45deg, rgba(0, 212, 255, 0.2), rgba(0, 212, 255, 0.2) 10px, rgba(0, 212, 255, 0.1) 10px, rgba(0, 212, 255, 0.1) 20px)' :
+                      'repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.1) 10px, transparent 10px, transparent 20px)'
+        }}>
         </div>
       )}
 
@@ -571,84 +561,93 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
     };
 
     /**
-     * Build a fresh ordered queue of clip IDs with batch-aware round-robin interleaving.
-     *
-     * Within each batch: sort by usageCount ASC, shuffle within same-count tiers.
-     * Across batches: interleave one clip at a time (round-robin) so that no two
-     * consecutive clips ever share the same batch (= same outfit/dress).
-     *
-     * Example with 2 batches [Y1,Y2,Y3] and [R1,R2]:
-     *   → [Y1, R1, Y2, R2, Y3]
+     * Builds a jumbled deck using a full shuffle and then a "fix-up" pass
+     * to prevent identically-batched clips from sitting back-to-back.
      */
-    const buildQueue = (clips: typeof actor.clips): string[] => {
-      // Group clips by batchId (clips without a batchId go into 'default')
-      const batchMap = new Map<string, typeof actor.clips>();
-      for (const clip of clips) {
-        const bid = clip.batchId ?? 'default';
-        if (!batchMap.has(bid)) batchMap.set(bid, []);
-        batchMap.get(bid)!.push(clip);
-      }
-
-      // For each batch: sort by usageCount ASC, shuffle within same-count tiers
-      const sortedBatches: string[][] = [];
-      for (const batchClips of batchMap.values()) {
-        const sorted = [...batchClips].sort((a, b) => (a.usageCount ?? 0) - (b.usageCount ?? 0));
-        let batchQueue: string[] = [];
-        let start = 0;
-        while (start < sorted.length) {
-          const tierVal = sorted[start].usageCount ?? 0;
-          let end = start;
-          while (end < sorted.length && (sorted[end].usageCount ?? 0) === tierVal) end++;
-          batchQueue = [...batchQueue, ...shuffleArr(sorted.slice(start, end)).map(c => c.id)];
-          start = end;
-        }
-        sortedBatches.push(batchQueue);
-      }
-
-      // Round-robin interleave: pick one from each batch in turn
-      const result: string[] = [];
-      const indices = new Array(sortedBatches.length).fill(0);
-      let hasMore = true;
-      while (hasMore) {
-        hasMore = false;
-        for (let i = 0; i < sortedBatches.length; i++) {
-          if (indices[i] < sortedBatches[i].length) {
-            result.push(sortedBatches[i][indices[i]++]);
-            hasMore = true;
+    const buildJumbledDeck = (lastId: string | null): string[] => {
+      // 1. Initial complete shuffle
+      const flatClips = shuffleArr([...actor.clips]);
+      
+      // 2. Fix-up to prevent adjacent same-batches
+      for (let i = 1; i < flatClips.length; i++) {
+        const prevBatch = flatClips[i - 1].batchId ?? 'default';
+        const currBatch = flatClips[i].batchId ?? 'default';
+        
+        if (prevBatch === currBatch) {
+          // Find the NEXT available clip that doesn't share this batch
+          let swapIdx = -1;
+          for (let j = i + 1; j < flatClips.length; j++) {
+            const candidateBatch = flatClips[j].batchId ?? 'default';
+            if (candidateBatch !== prevBatch) {
+               swapIdx = j;
+               break; // found the nearest candidate
+            }
+          }
+          
+          if (swapIdx !== -1) {
+            [flatClips[i], flatClips[swapIdx]] = [flatClips[swapIdx], flatClips[i]];
           }
         }
       }
-      return result;
+
+      const finalDeck = flatClips.map(c => c.id);
+
+      // 3. Boundary check with previous clip (from timeline)
+      if (lastId && finalDeck.length > 0) {
+         const lastPlayedClip = actor.clips.find(c => c.id === lastId);
+         const firstDeckClip = actor.clips.find(c => c.id === finalDeck[0]);
+         if (lastPlayedClip && firstDeckClip) {
+            const lastBatch = lastPlayedClip.batchId ?? 'default';
+            const firstBatch = firstDeckClip.batchId ?? 'default';
+            
+            if (lastBatch === firstBatch) {
+               let swapIdx = -1;
+               // Find nearest clip in deck that doesn't share this batch
+               for (let i = 1; i < finalDeck.length; i++) {
+                 const candidateClip = actor.clips.find(c => c.id === finalDeck[i]);
+                 if (candidateClip && (candidateClip.batchId ?? 'default') !== lastBatch) {
+                   swapIdx = i;
+                   break;
+                 }
+               }
+               if (swapIdx !== -1) {
+                 [finalDeck[0], finalDeck[swapIdx]] = [finalDeck[swapIdx], finalDeck[0]];
+               }
+            }
+         }
+      }
+
+      return finalDeck;
     };
 
-    // Use existing queue/position if available, otherwise build a fresh one
-    let queue: string[] = (actor.deckQueue && actor.deckQueue.length > 0)
-      ? actor.deckQueue
-      : buildQueue(actor.clips);
-    let position = actor.deckPosition ?? 0;
+    // Restore a valid existing deck, or create a fresh one.
+    // A deck is valid if all its IDs still exist AND no new clips were added since its creation.
+    const lastPlayedClipId = actor.lastPlayedClipId ?? null;
+    const existingDeckIsValid =
+      Array.isArray(actor.deckQueue) &&
+      actor.deckQueue.length > 0 &&
+      actor.deckOriginalTotal === actor.clips.length &&
+      actor.deckQueue.every(id => actor.clips.some(c => c.id === id));
 
-    // If the queue has been fully consumed, start a new cycle
-    if (position >= queue.length) {
-      queue = buildQueue(actor.clips);
-      position = 0;
-    }
+    let currentDeck: string[] = existingDeckIsValid
+      ? [...actor.deckQueue!]
+      : buildJumbledDeck(lastPlayedClipId);
 
+    // ── Fill the timeline slot ──
     let remainingDur = duration;
     let currentStartTime = clipToReplace.startTime;
     const newClips: TrackItem[] = [];
-    let newPosition = position;
+    let currentLastPlayedId = lastPlayedClipId;
 
     let safety = 0;
     while (remainingDur > 0.01 && safety < 1000) {
       safety++;
 
-      // Rebuild the queue (new cycle) if we reach the end mid-voiceover
-      if (newPosition >= queue.length) {
-        queue = buildQueue(actor.clips);
-        newPosition = 0;
+      if (currentDeck.length === 0) {
+        currentDeck = buildJumbledDeck(currentLastPlayedId);
       }
 
-      const clipId = queue[newPosition++];
+      const clipId = currentDeck.shift()!;
       const pickedClip = actor.clips.find(c => c.id === clipId);
       if (!pickedClip) continue;
 
@@ -666,14 +665,22 @@ const MultiTrackTimeline: React.FC<MultiTrackTimelineProps> = ({
         actorClipId: pickedClip.id
       });
 
+      currentLastPlayedId = clipId;
       remainingDur -= chunkDur;
       currentStartTime += chunkDur;
     }
 
-    // Persist the updated queue state into the actor (saved to IndexedDB automatically)
+    // ── Update Actor Persistence ──
     setActors(prev => prev.map(a =>
       a.id === actorId
-        ? { ...a, deckQueue: queue, deckPosition: newPosition }
+        ? {
+            ...a,
+            deckQueue: currentDeck,
+            deckOriginalTotal: actor.clips.length,
+            lastPlayedClipId: currentLastPlayedId ?? undefined,
+            // activeBatchId is now legacy as we pool all batches
+            activeBatchId: undefined 
+          }
         : a
     ));
 

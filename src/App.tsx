@@ -40,8 +40,12 @@ export interface Actor {
   id: string;
   name: string;
   clips: ActorClip[];
+  /** Remaining clip IDs in the current randomized rotation deck (jumbled across all batches) */
   deckQueue?: string[];
+  deckOriginalTotal?: number;
   deckPosition?: number;
+  /** The last clip ID that was placed — used for back-to-back anti-repetition */
+  lastPlayedClipId?: string;
 }
 
 export interface EffectType {
@@ -251,10 +255,13 @@ function App() {
 
       const ffmpeg = ffmpegRef.current;
       let ffmpegLogs: string[] = [];
+      let isProbing = false;
+      let extractLog = '';
 
       ffmpeg.on('log', ({ message }) => {
         console.log('[FFMPEG]', message);
         ffmpegLogs.push(message);
+        if (isProbing) extractLog += message + '\n';
         if (ffmpegLogs.length > 30) ffmpegLogs.shift();
 
         if (message.includes('frame=')) {
@@ -286,7 +293,7 @@ function App() {
       });
       const sortedBoundaries = Array.from(boundaries).sort((a, b) => a - b);
 
-      const visualTimeline: Array<{ file: File; mediaStart: number; duration: number }> = [];
+      const visualTimeline: Array<{ file: File; mediaStart: number; duration: number; muted: boolean }> = [];
 
       for (let si = 0; si < sortedBoundaries.length - 1; si++) {
         const segStart = sortedBoundaries[si];
@@ -301,7 +308,8 @@ function App() {
 
         if (clip && clip.file) {
           const mediaStart = (clip.mediaStartTime || 0) + (segStart - clip.startTime);
-          visualTimeline.push({ file: clip.file, mediaStart, duration: segEnd - segStart });
+          const isMuted = clip.muted === true || clip.volume === 0;
+          visualTimeline.push({ file: clip.file, mediaStart, duration: segEnd - segStart, muted: isMuted });
         }
       }
 
@@ -309,6 +317,7 @@ function App() {
 
       // Step 1 — Write source files to ffmpeg FS (deduplicated)
       const writtenFiles = new Map<File, string>();
+      const fileHasAudio = new Map<string, boolean>();
       const getInputName = (file: File): string => {
         if (!writtenFiles.has(file)) {
           const ext = file.name.split('.').pop() || 'mp4';
@@ -323,6 +332,13 @@ function App() {
       for (const [file, name] of writtenFiles.entries()) {
         setExportMessage(`Loading: ${file.name}`);
         await ffmpeg.writeFile(name, await fetchFile(file));
+        
+        isProbing = true;
+        extractLog = '';
+        await ffmpeg.exec(['-i', name]);
+        isProbing = false;
+        fileHasAudio.set(name, extractLog.includes('Audio:'));
+        
         written++;
         setExportProgress(Math.round((written / writtenFiles.size) * 20));
       }
@@ -334,31 +350,61 @@ function App() {
         const inputName = getInputName(seg.file);
         const outputName = `seg_${i}.mp4`;
 
+        const hasSourceAudio = fileHasAudio.get(inputName) || false;
+        const wantsAudio = !seg.muted && hasSourceAudio;
+
         setExportMessage(`Processing clip ${i + 1} of ${visualTimeline.length}...`);
         setExportProgress(20 + Math.round((i / visualTimeline.length) * 60));
 
         ffmpegLogs = [];
         // Use post-input -ss (accurate seeking) to preserve audio streams
-        // Also add -af anull to force audio output even if source lacks audio
-        const ret = await ffmpeg.exec([
+        const args = [
           '-i', inputName,
           '-ss', String(seg.mediaStart),
-          '-t', String(seg.duration),
-          '-vf', 'scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,fps=30',
-          '-af', 'aresample=44100',
-          '-c:v', 'libx264',
-          '-preset', 'ultrafast',
-          '-crf', '28',
-          '-pix_fmt', 'yuv420p',
-          '-c:a', 'aac',
-          '-b:a', '128k',
-          '-ar', '44100',
-          '-ac', '2',
-          '-avoid_negative_ts', 'make_zero',
-          '-shortest',
-          '-y',
-          outputName,
-        ]);
+          '-t', String(seg.duration)
+        ];
+        
+        if (!wantsAudio) {
+           // Provide a silent audio stream
+           args.push('-f', 'lavfi', '-t', String(seg.duration), '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100');
+        }
+        
+        args.push('-vf', 'scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,fps=30');
+        
+        if (!wantsAudio) {
+           args.push(
+             '-map', '0:v:0',
+             '-map', '1:a:0',
+             '-c:v', 'libx264',
+             '-preset', 'ultrafast',
+             '-crf', '28',
+             '-pix_fmt', 'yuv420p',
+             '-c:a', 'aac',
+             '-b:a', '128k',
+             '-ar', '44100',
+             '-ac', '2',
+             '-shortest',
+             '-y',
+             outputName
+           );
+        } else {
+           args.push(
+             '-af', 'aresample=44100',
+             '-c:v', 'libx264',
+             '-preset', 'ultrafast',
+             '-crf', '28',
+             '-pix_fmt', 'yuv420p',
+             '-c:a', 'aac',
+             '-b:a', '128k',
+             '-ar', '44100',
+             '-ac', '2',
+             '-avoid_negative_ts', 'make_zero',
+             '-y',
+             outputName
+           );
+        }
+        
+        const ret = await ffmpeg.exec(args);
 
         if (ret !== 0) {
           throw new Error(`Failed on clip ${i + 1}/${visualTimeline.length}:\n${ffmpegLogs.slice(-10).join('\n')}`);

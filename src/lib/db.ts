@@ -1,9 +1,10 @@
 import type { Actor, EditState, TrackItem } from '../App';
 
 const DB_NAME = 'ClipAssemblerDB';
-const DB_VERSION = 2; // Incremented to add project store
+const DB_VERSION = 3; // Incremented to add projects_meta architecture
 const STORE_NAME = 'actors';
 const PROJECT_STORE = 'project';
+const PROJECT_META_STORE = 'projects_meta';
 
 export function initDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -19,6 +20,9 @@ export function initDB(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(PROJECT_STORE)) {
         db.createObjectStore(PROJECT_STORE);
+      }
+      if (!db.objectStoreNames.contains(PROJECT_META_STORE)) {
+        db.createObjectStore(PROJECT_META_STORE);
       }
     };
   });
@@ -113,36 +117,58 @@ export interface ProjectMeta {
 export async function getAllProjects(): Promise<ProjectMeta[]> {
   const db = await initDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(PROJECT_STORE, 'readonly');
-    const store = tx.objectStore(PROJECT_STORE);
-    const req = store.openCursor();
-    const projects: ProjectMeta[] = [];
+    const tx = db.transaction([PROJECT_STORE, PROJECT_META_STORE], 'readwrite');
+    const metaStore = tx.objectStore(PROJECT_META_STORE);
     
-    req.onsuccess = (e) => {
-      const cursor = (e.target as IDBRequest<IDBCursorWithValue>).result;
-      if (cursor) {
-        if (cursor.key === 'current_project') {
-           projects.push({ id: 'current_project', name: 'My First Project', lastModified: Date.now() });
-        } else if (cursor.value.id) {
-           const proj = cursor.value as Project;
-           projects.push({ id: proj.id, name: proj.name, lastModified: proj.lastModified });
-        }
-        cursor.continue();
-      } else {
-        // Sort newest first
-        projects.sort((a, b) => b.lastModified - a.lastModified);
-        resolve(projects);
-      }
+    // Quick load from lightweight meta store
+    const metaReq = metaStore.getAll();
+    
+    metaReq.onsuccess = () => {
+       const metas = metaReq.result as ProjectMeta[];
+       if (metas && metas.length > 0) {
+          metas.sort((a,b) => b.lastModified - a.lastModified);
+          resolve(metas);
+       } else {
+          // Backward compatibility: the database is older. Backfill from slow store!
+          const store = tx.objectStore(PROJECT_STORE);
+          const req = store.openCursor();
+          const projects: ProjectMeta[] = [];
+          
+          req.onsuccess = (e) => {
+            const cursor = (e.target as IDBRequest<IDBCursorWithValue>).result;
+            if (cursor) {
+              let meta: ProjectMeta | null = null;
+              if (cursor.key === 'current_project') {
+                 meta = { id: 'current_project', name: 'My First Project', lastModified: Date.now() };
+              } else if (cursor.value.id) {
+                 const proj = cursor.value as Project;
+                 meta = { id: proj.id, name: proj.name, lastModified: proj.lastModified };
+              }
+              
+              if (meta) {
+                 projects.push(meta);
+                 // Cache for future loads
+                 metaStore.put(meta, meta.id);
+              }
+              cursor.continue();
+            } else {
+              projects.sort((a, b) => b.lastModified - a.lastModified);
+              resolve(projects);
+            }
+          };
+          req.onerror = () => reject(req.error);
+       }
     };
-    req.onerror = () => reject(req.error);
+    metaReq.onerror = () => reject(metaReq.error);
   });
 }
 
 export async function saveProject(project: Project): Promise<void> {
   const db = await initDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(PROJECT_STORE, 'readwrite');
+    const tx = db.transaction([PROJECT_STORE, PROJECT_META_STORE], 'readwrite');
     const store = tx.objectStore(PROJECT_STORE);
+    const metaStore = tx.objectStore(PROJECT_META_STORE);
     
     // Strip volatile Blob URLs to avoid DataCloneError
     const cleanState: EditState = {
@@ -157,9 +183,16 @@ export async function saveProject(project: Project): Promise<void> {
     };
     
     const cleanProject: Project = { ...project, state: cleanState };
-    const req = store.put(cleanProject, project.id);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
+    store.put(cleanProject, project.id);
+    
+    // Write lightweight meta mirror
+    const meta: ProjectMeta = { id: project.id, name: project.name, lastModified: project.lastModified };
+    const metaReq = metaStore.put(meta, project.id);
+    
+    metaReq.onsuccess = () => resolve();
+    metaReq.onerror = () => reject(metaReq.error);
+    
+    tx.onerror = () => reject(tx.error);
   });
 }
 
@@ -213,10 +246,12 @@ export async function loadProject(id: string): Promise<Project | null> {
 export async function deleteProject(id: string): Promise<void> {
   const db = await initDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(PROJECT_STORE, 'readwrite');
-    const store = tx.objectStore(PROJECT_STORE);
-    const req = store.delete(id);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
+    const tx = db.transaction([PROJECT_STORE, PROJECT_META_STORE], 'readwrite');
+    tx.objectStore(PROJECT_STORE).delete(id);
+    const metaReq = tx.objectStore(PROJECT_META_STORE).delete(id);
+    
+    metaReq.onsuccess = () => resolve();
+    metaReq.onerror = () => reject(metaReq.error);
+    tx.onerror = () => reject(tx.error);
   });
 }

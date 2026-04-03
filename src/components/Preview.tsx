@@ -95,94 +95,109 @@ const Preview: React.FC<PreviewProps> = ({ editState, currentTime, isPlaying, se
     });
   }, [editState.audioTracks]);
 
+  // Decouple full React tree renders from Playhead updates
+  const tracksRef = useRef(editState);
+  useEffect(() => { tracksRef.current = editState; }, [editState]);
+
+  const localTimeRef = useRef(currentTime);
+  useEffect(() => { 
+    if (!isPlaying) localTimeRef.current = currentTime; 
+  }, [currentTime, isPlaying]);
+
   // Use requestAnimationFrame for smooth 60fps playhead tracking based on WALL CLOCK
   useEffect(() => {
     let animationFrameId: number;
     let lastTime = window.performance.now();
+    let lastStateUpdateTime = lastTime;
     
     const updatePlayhead = (now: DOMHighResTimeStamp) => {
       const delta = (now - lastTime) / 1000;
       lastTime = now;
       
       if (isPlaying) {
-        setEditState(prev => {
-          let nextTime = prev.currentTime + delta;
-          
-          if (prev.duration > 0 && nextTime >= prev.duration) {
-             nextTime = prev.duration;
-             Object.values(videoRefs.current).forEach(v => v && !v.paused && v.pause());
-             Object.values(audioRefs.current).forEach(a => a && !a.paused && a.pause());
-             return { ...prev, currentTime: 0, isPlaying: false };
-          }
-          
-          // Sync Audio loop smoothly
-          prev.audioTracks.forEach(track => {
-            const audioEl = audioRefs.current[track.id];
-            if (audioEl) {
-              const isActive = nextTime >= track.startTime && nextTime <= track.startTime + track.duration;
-              if (isActive) {
-                 if (audioEl.paused) audioEl.play().catch(() => {});
-                 const expectedAudioTime = (nextTime - track.startTime) + (track.mediaStartTime || 0);
-                 if (Math.abs(audioEl.currentTime - expectedAudioTime) > 0.15) {
-                   audioEl.currentTime = expectedAudioTime;
-                 }
-              } else {
-                 if (!audioEl.paused) audioEl.pause();
-              }
-            }
-          });
-
-          // Sync Video loops smoothly without deriving our timeline from them!
-          const activeVideo = prev.videoTracks.find(t => nextTime >= t.startTime && nextTime < t.startTime + t.duration);
-          if (activeVideo) {
-            const vEl = videoRefs.current[activeVideo.id];
-            if (vEl) {
-               if (vEl.paused) vEl.play().catch(() => {});
-               const expectedVideoTime = (nextTime - activeVideo.startTime) + (activeVideo.mediaStartTime || 0);
-               if (Math.abs(vEl.currentTime - expectedVideoTime) > 0.2) {
-                 vEl.currentTime = expectedVideoTime; // hard sync drift correction
+        localTimeRef.current += delta;
+        let nextTime = localTimeRef.current;
+        const state = tracksRef.current;
+        
+        if (state.duration > 0 && nextTime >= state.duration) {
+           nextTime = state.duration;
+           Object.values(videoRefs.current).forEach(v => v && !v.paused && v.pause());
+           Object.values(audioRefs.current).forEach(a => a && !a.paused && a.pause());
+           setEditState(prev => ({ ...prev, currentTime: 0, isPlaying: false }));
+           return;
+        }
+        
+        // Sync Audio loop smoothly
+        state.audioTracks.forEach(track => {
+          const audioEl = audioRefs.current[track.id];
+          if (audioEl) {
+            const isActive = nextTime >= track.startTime && nextTime <= track.startTime + track.duration;
+            if (isActive) {
+               if (audioEl.paused) audioEl.play().catch(() => {});
+               const expectedAudioTime = (nextTime - track.startTime) + (track.mediaStartTime || 0);
+               if (Math.abs(audioEl.currentTime - expectedAudioTime) > 0.15) {
+                 audioEl.currentTime = expectedAudioTime;
                }
+            } else {
+               if (!audioEl.paused) audioEl.pause();
             }
           }
-          
-          const activeClip = (prev.clipTracks || []).find(t => nextTime >= t.startTime && nextTime < t.startTime + t.duration);
-          if (activeClip) {
-            const cEl = videoRefs.current[activeClip.id];
-            if (cEl) {
-               if (cEl.paused) cEl.play().catch(() => {});
-               const expectedClipTime = (nextTime - activeClip.startTime) + (activeClip.mediaStartTime || 0);
-               if (Math.abs(cEl.currentTime - expectedClipTime) > 0.2) {
-                 cEl.currentTime = expectedClipTime; // hard sync drift correction
-               }
-            }
-          }
-
-          const activeManualClip = (prev.manualClipTracks || []).find(t => nextTime >= t.startTime && nextTime < t.startTime + t.duration);
-          if (activeManualClip) {
-            const mEl = videoRefs.current[activeManualClip.id];
-            if (mEl) {
-               if (mEl.paused) mEl.play().catch(() => {});
-               const expectedMTime = (nextTime - activeManualClip.startTime) + (activeManualClip.mediaStartTime || 0);
-               if (Math.abs(mEl.currentTime - expectedMTime) > 0.2) {
-                 mEl.currentTime = expectedMTime; 
-               }
-            }
-          }
-
-          const activeOverlayClip = (prev.overlayTracks || []).find(t => nextTime >= t.startTime && nextTime < t.startTime + t.duration);
-          if (activeOverlayClip) {
-            const oEl = videoRefs.current[activeOverlayClip.id];
-            if (oEl) {
-               if (oEl.paused) oEl.play().catch(() => {});
-               const expectedOTime = (nextTime - activeOverlayClip.startTime) + (activeOverlayClip.mediaStartTime || 0);
-               if (Math.abs(oEl.currentTime - expectedOTime) > 0.2) {
-                 oEl.currentTime = expectedOTime;
-               }
-            }
-          }
-
-          return { ...prev, currentTime: nextTime };
         });
+
+        // Sync Video loops smoothly without deriving our timeline from them!
+        const activeVideo = state.videoTracks.find(t => nextTime >= t.startTime && nextTime < t.startTime + t.duration);
+        if (activeVideo) {
+          const vEl = videoRefs.current[activeVideo.id];
+          if (vEl) {
+             if (vEl.paused) vEl.play().catch(() => {});
+             const expectedVideoTime = (nextTime - activeVideo.startTime) + (activeVideo.mediaStartTime || 0);
+             if (Math.abs(vEl.currentTime - expectedVideoTime) > 0.2) {
+               vEl.currentTime = expectedVideoTime; // hard sync drift correction
+             }
+          }
+        }
+        
+        const activeClip = (state.clipTracks || []).find(t => nextTime >= t.startTime && nextTime < t.startTime + t.duration);
+        if (activeClip) {
+          const cEl = videoRefs.current[activeClip.id];
+          if (cEl) {
+             if (cEl.paused) cEl.play().catch(() => {});
+             const expectedClipTime = (nextTime - activeClip.startTime) + (activeClip.mediaStartTime || 0);
+             if (Math.abs(cEl.currentTime - expectedClipTime) > 0.2) {
+               cEl.currentTime = expectedClipTime; // hard sync drift correction
+             }
+          }
+        }
+
+        const activeManualClip = (state.manualClipTracks || []).find(t => nextTime >= t.startTime && nextTime < t.startTime + t.duration);
+        if (activeManualClip) {
+          const mEl = videoRefs.current[activeManualClip.id];
+          if (mEl) {
+             if (mEl.paused) mEl.play().catch(() => {});
+             const expectedMTime = (nextTime - activeManualClip.startTime) + (activeManualClip.mediaStartTime || 0);
+             if (Math.abs(mEl.currentTime - expectedMTime) > 0.2) {
+               mEl.currentTime = expectedMTime; 
+             }
+          }
+        }
+
+        const activeOverlayClip = (state.overlayTracks || []).find(t => nextTime >= t.startTime && nextTime < t.startTime + t.duration);
+        if (activeOverlayClip) {
+          const oEl = videoRefs.current[activeOverlayClip.id];
+          if (oEl) {
+             if (oEl.paused) oEl.play().catch(() => {});
+             const expectedOTime = (nextTime - activeOverlayClip.startTime) + (activeOverlayClip.mediaStartTime || 0);
+             if (Math.abs(oEl.currentTime - expectedOTime) > 0.2) {
+               oEl.currentTime = expectedOTime;
+             }
+          }
+        }
+
+        // Throttle React state updates to ~20fps to prevent massive DOM lag
+        if (now - lastStateUpdateTime > 50) {
+           lastStateUpdateTime = now;
+           setEditState(prev => ({ ...prev, currentTime: nextTime }));
+        }
       }
       
       animationFrameId = requestAnimationFrame(updatePlayhead);
@@ -190,6 +205,7 @@ const Preview: React.FC<PreviewProps> = ({ editState, currentTime, isPlaying, se
 
     if (isPlaying) {
       lastTime = window.performance.now();
+      lastStateUpdateTime = lastTime;
       animationFrameId = requestAnimationFrame(updatePlayhead);
     }
     
@@ -258,7 +274,7 @@ const Preview: React.FC<PreviewProps> = ({ editState, currentTime, isPlaying, se
             ...(editState.manualClipTracks || []),
             ...(editState.overlayTracks || [])
           ].filter(
-             t => (t.startTime >= currentTime - 2 && t.startTime <= currentTime + 5) ||
+             t => (t.startTime >= currentTime - 0.2 && t.startTime <= currentTime + 0.5) ||
                   (currentTime >= t.startTime && currentTime <= t.startTime + t.duration)
           ).map((track) => {
              const isOverlayLayer = (editState.overlayTracks || []).some(t => t.id === track.id);
@@ -332,7 +348,7 @@ const Preview: React.FC<PreviewProps> = ({ editState, currentTime, isPlaying, se
 
           {/* Invisible Audio Tracks - also rolling window */}
           {editState.audioTracks.filter(
-             t => (t.startTime >= currentTime - 2 && t.startTime <= currentTime + 5) ||
+             t => (t.startTime >= currentTime - 0.2 && t.startTime <= currentTime + 0.5) ||
                   (currentTime >= t.startTime && currentTime <= t.startTime + t.duration)
           ).map((track: TrackItem) => (
             <audio
